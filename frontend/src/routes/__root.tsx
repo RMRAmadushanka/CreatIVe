@@ -9,6 +9,20 @@ import { ErrorPage } from "@/components/layout/ErrorPage";
 import { NotFoundPage } from "@/components/layout/NotFoundPage";
 import { APP_NAME } from "@/constants/app";
 
+function RootDocument({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en" className="dark">
+      <head>
+        <HeadContent />
+      </head>
+      <body>
+        {children}
+        <Scripts />
+      </body>
+    </html>
+  );
+}
+
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
     meta: [
@@ -27,25 +41,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
     ],
   }),
-  shellComponent: RootShell,
+  shellComponent: RootDocument,
   component: RootComponent,
   notFoundComponent: NotFoundPage,
   errorComponent: ErrorPage,
 });
-
-function RootShell({ children }: { children: ReactNode }) {
-  return (
-    <html lang="en" className="dark">
-      <head>
-        <HeadContent />
-      </head>
-      <body>
-        {children}
-        <Scripts />
-      </body>
-    </html>
-  );
-}
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
