@@ -4,12 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { authStore, useAuth } from "@/store/auth-store";
+import { authStore, useAuth, useAuthReady } from "@/store/auth-store";
 import { ShieldCheck } from "lucide-react";
 
 export function AuthPage() {
   const navigate = useNavigate();
   const user = useAuth();
+  const authReady = useAuthReady();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -17,8 +18,8 @@ export function AuthPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (user) navigate({ to: "/dashboard" });
-  }, [user, navigate]);
+    if (authReady && user) navigate({ to: "/dashboard" });
+  }, [authReady, user, navigate]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,15 +27,24 @@ export function AuthPage() {
       toast.error("Please fill in all fields");
       return;
     }
+
     setBusy(true);
-    await new Promise((r) => setTimeout(r, 400));
-    const u =
-      mode === "signin"
-        ? authStore.signIn(email, password)
-        : authStore.signUp(name, email, password);
-    setBusy(false);
-    toast.success(`Welcome, ${u.name}!`, { description: `Signed in as ${u.role}` });
-    navigate({ to: "/dashboard" });
+    try {
+      const signedInUser =
+        mode === "signin"
+          ? await authStore.signIn(email, password)
+          : await authStore.signUp(name, email, password);
+
+      toast.success(`Welcome, ${signedInUser.name}!`, {
+        description: `Signed in as ${signedInUser.role}`,
+      });
+      navigate({ to: "/dashboard" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Authentication failed";
+      toast.error(message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -50,8 +60,8 @@ export function AuthPage() {
             </h1>
             <p className="text-xs text-muted-foreground">
               {mode === "signin"
-                ? "Sign in to your workspace"
-                : "Get started with the CMS in seconds"}
+                ? "Sign in with your Supabase account"
+                : "Create a Supabase-backed account"}
             </p>
           </div>
         </div>
@@ -75,12 +85,12 @@ export function AuthPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@acme.com"
+              placeholder="you@example.com"
               autoComplete="email"
             />
             <p className="text-[11px] text-muted-foreground">
-              Tip: emails starting with <code className="rounded bg-muted px-1">admin</code> sign in
-              as Admin.
+              Emails starting with <code className="rounded bg-muted px-1">admin</code> are stored
+              with the admin role in user metadata.
             </p>
           </div>
           <div className="space-y-1.5">
@@ -103,7 +113,7 @@ export function AuthPage() {
         <div className="mt-6 text-center text-sm text-muted-foreground">
           {mode === "signin" ? (
             <>
-              Don't have an account?{" "}
+              Don&apos;t have an account?{" "}
               <button
                 type="button"
                 onClick={() => setMode("signup")}

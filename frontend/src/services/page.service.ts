@@ -1,3 +1,4 @@
+import { authorizedFetch } from "@/lib/api-client";
 import { API_BASE_URL, API_ENDPOINTS } from "@/constants/api";
 import type { CreatePageRequest, Page } from "@/types/page.types";
 
@@ -12,7 +13,7 @@ async function parseOrThrow<T>(res: Response): Promise<T> {
 }
 
 export async function createPage(body: CreatePageRequest): Promise<Page> {
-  const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.pages}`, {
+  const res = await authorizedFetch(`${API_BASE_URL}${API_ENDPOINTS.pages}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -21,7 +22,7 @@ export async function createPage(body: CreatePageRequest): Promise<Page> {
 }
 
 export async function getPageBySlug(slug: string): Promise<Page | null> {
-  const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.pageBySlug(slug)}`);
+  const res = await authorizedFetch(`${API_BASE_URL}${API_ENDPOINTS.pageBySlug(slug)}`);
   if (res.status === 404) {
     return null;
   }

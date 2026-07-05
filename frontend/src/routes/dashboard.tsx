@@ -26,7 +26,7 @@ import {
   Shield,
   Layers,
 } from "lucide-react";
-import { authStore, useAuth } from "@/store/auth-store";
+import { authStore, useAuth, useAuthReady } from "@/store/auth-store";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
@@ -40,13 +40,14 @@ export const Route = createFileRoute("/dashboard")({
 
 function DashboardLayout() {
   const user = useAuth();
+  const authReady = useAuthReady();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!user) navigate({ to: "/auth" });
-  }, [user, navigate]);
+    if (authReady && !user) navigate({ to: "/auth" });
+  }, [authReady, user, navigate]);
 
-  if (!user) return null;
+  if (!authReady || !user) return null;
 
   return (
     <SidebarProvider>
@@ -74,8 +75,8 @@ function DashboardLayout() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => {
-                  authStore.signOut();
+                onClick={async () => {
+                  await authStore.signOut();
                   navigate({ to: "/auth" });
                 }}
               >
