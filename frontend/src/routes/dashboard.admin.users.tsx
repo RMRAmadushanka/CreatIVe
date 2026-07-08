@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { usePlatformUsers, usersStore } from "@/store/projects-store";
+import { usePlatformUsers, usersStore } from "@/store/users-store";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/dashboard/admin/users")({

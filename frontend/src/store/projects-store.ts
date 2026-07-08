@@ -1,6 +1,10 @@
-import { useSyncExternalStore } from "react";
+import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
+
+import { createIndexedDBStorage } from "@/lib/indexeddb-storage";
 
 export type Page = { id: string; title: string; slug: string; canvasNodes?: unknown[] };
+
 export type Project = {
   id: string;
   name: string;
@@ -11,10 +15,9 @@ export type Project = {
   createdAt: number;
 };
 
-const KEY = "cms.projects";
-const listeners = new Set<() => void>();
+const uid = (p = "id") => `${p}_${Math.random().toString(36).slice(2, 9)}`;
 
-const seed = (): Project[] => [
+const seedProjects = (): Project[] => [
   {
     id: "p_acme",
     name: "Acme Marketing Site",
@@ -51,129 +54,104 @@ const seed = (): Project[] => [
   },
 ];
 
-let state: Project[] = (() => {
-  if (typeof window === "undefined") return seed();
-  try {
-    const raw = window.localStorage.getItem(KEY);
-    if (raw) return JSON.parse(raw) as Project[];
-  } catch {}
-  const s = seed();
-  window.localStorage.setItem(KEY, JSON.stringify(s));
-  return s;
-})();
+type ProjectsState = {
+  projects: Project[];
+  create: (name: string, domain: string, ownerEmail: string, ownerName: string) => Project;
+  delete: (id: string) => void;
+  addPage: (projectId: string, title: string) => void;
+  deletePage: (projectId: string, pageId: string) => void;
+  setPages: (projectId: string, pages: Page[]) => void;
+  getByOwner: (email: string) => Project[];
+  get: (id: string) => Project | undefined;
+};
 
-function emit() {
-  if (typeof window !== "undefined") {
-    window.localStorage.setItem(KEY, JSON.stringify(state));
-  }
-  listeners.forEach((l) => l());
-}
+export const useProjectsStore = create<ProjectsState>()(
+  persist(
+    (set, get) => ({
+      projects: seedProjects(),
 
-const uid = (p = "id") => `${p}_${Math.random().toString(36).slice(2, 9)}`;
+      create: (name, domain, ownerEmail, ownerName) => {
+        const project: Project = {
+          id: uid("p"),
+          name,
+          domain,
+          ownerEmail,
+          ownerName,
+          createdAt: Date.now(),
+          pages: [{ id: uid("pg"), title: "Home", slug: "/" }],
+        };
+        set((s) => ({ projects: [project, ...s.projects] }));
+        return project;
+      },
 
+      delete: (id) => set((s) => ({ projects: s.projects.filter((p) => p.id !== id) })),
+
+      addPage: (projectId, title) => {
+        const slug =
+          "/" +
+          title
+            .toLowerCase()
+            .trim()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "");
+        set((s) => ({
+          projects: s.projects.map((p) =>
+            p.id === projectId
+              ? { ...p, pages: [...p.pages, { id: uid("pg"), title, slug: slug || "/page" }] }
+              : p,
+          ),
+        }));
+      },
+
+      deletePage: (projectId, pageId) =>
+        set((s) => ({
+          projects: s.projects.map((p) =>
+            p.id === projectId ? { ...p, pages: p.pages.filter((pg) => pg.id !== pageId) } : p,
+          ),
+        })),
+
+      setPages: (projectId, pages) =>
+        set((s) => ({
+          projects: s.projects.map((p) => (p.id === projectId ? { ...p, pages } : p)),
+        })),
+
+      getByOwner: (email) => get().projects.filter((p) => p.ownerEmail === email),
+
+      get: (id) => get().projects.find((p) => p.id === id),
+    }),
+    {
+      name: "cms.projects",
+      storage: createJSONStorage(() => createIndexedDBStorage()),
+      skipHydration: true,
+      partialize: (state) => ({ projects: state.projects }),
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<ProjectsState>),
+        projects:
+          (persisted as ProjectsState | undefined)?.projects?.length
+            ? (persisted as ProjectsState).projects
+            : current.projects,
+      }),
+    },
+  ),
+);
+
+/** Imperative API for non-React code (builder save, etc.). */
 export const projectsStore = {
-  getAll: () => state,
-  getByOwner: (email: string) => state.filter((p) => p.ownerEmail === email),
-  get: (id: string) => state.find((p) => p.id === id),
-  create: (name: string, domain: string, ownerEmail: string, ownerName: string) => {
-    const p: Project = {
-      id: uid("p"),
-      name,
-      domain,
-      ownerEmail,
-      ownerName,
-      createdAt: Date.now(),
-      pages: [{ id: uid("pg"), title: "Home", slug: "/" }],
-    };
-    state = [p, ...state];
-    emit();
-    return p;
-  },
-  delete: (id: string) => {
-    state = state.filter((p) => p.id !== id);
-    emit();
-  },
-  addPage: (projectId: string, title: string) => {
-    const slug =
-      "/" +
-      title
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "");
-    state = state.map((p) =>
-      p.id === projectId
-        ? { ...p, pages: [...p.pages, { id: uid("pg"), title, slug: slug || "/page" }] }
-        : p,
-    );
-    emit();
-  },
-  deletePage: (projectId: string, pageId: string) => {
-    state = state.map((p) =>
-      p.id === projectId ? { ...p, pages: p.pages.filter((pg) => pg.id !== pageId) } : p,
-    );
-    emit();
-  },
-  setPages: (projectId: string, pages: Page[]) => {
-    let changed = false;
-    state = state.map((p) => {
-      if (p.id !== projectId) return p;
-      if (JSON.stringify(p.pages) === JSON.stringify(pages)) return p;
-      changed = true;
-      return { ...p, pages };
-    });
-    if (changed) emit();
-  },
-  subscribe: (cb: () => void) => {
-    listeners.add(cb);
-    return () => listeners.delete(cb);
-  },
+  getAll: () => useProjectsStore.getState().projects,
+  getByOwner: (email: string) => useProjectsStore.getState().getByOwner(email),
+  get: (id: string) => useProjectsStore.getState().get(id),
+  create: (...args: Parameters<ProjectsState["create"]>) =>
+    useProjectsStore.getState().create(...args),
+  delete: (id: string) => useProjectsStore.getState().delete(id),
+  addPage: (...args: Parameters<ProjectsState["addPage"]>) =>
+    useProjectsStore.getState().addPage(...args),
+  deletePage: (...args: Parameters<ProjectsState["deletePage"]>) =>
+    useProjectsStore.getState().deletePage(...args),
+  setPages: (...args: Parameters<ProjectsState["setPages"]>) =>
+    useProjectsStore.getState().setPages(...args),
 };
 
 export function useProjects() {
-  return useSyncExternalStore(projectsStore.subscribe, projectsStore.getAll, () => [] as Project[]);
-}
-
-// -------- Users (admin) --------
-export type PlatformUser = { id: string; name: string; email: string; role: "admin" | "user" };
-const UKEY = "cms.users";
-const uListeners = new Set<() => void>();
-const seedUsers = (): PlatformUser[] => [
-  { id: "u_1", name: "Admin Root", email: "admin@platform.io", role: "admin" },
-  { id: "u_2", name: "Jane Cooper", email: "jane@northwind.shop", role: "user" },
-  { id: "u_3", name: "Wade Warren", email: "wade@example.com", role: "user" },
-  { id: "u_4", name: "Esther Howard", email: "esther@example.com", role: "user" },
-  { id: "u_5", name: "Cameron W.", email: "cam@studio.dev", role: "admin" },
-];
-
-let users: PlatformUser[] = (() => {
-  if (typeof window === "undefined") return seedUsers();
-  try {
-    const raw = window.localStorage.getItem(UKEY);
-    if (raw) return JSON.parse(raw) as PlatformUser[];
-  } catch {}
-  const s = seedUsers();
-  window.localStorage.setItem(UKEY, JSON.stringify(s));
-  return s;
-})();
-
-function emitU() {
-  if (typeof window !== "undefined") window.localStorage.setItem(UKEY, JSON.stringify(users));
-  uListeners.forEach((l) => l());
-}
-
-export const usersStore = {
-  getAll: () => users,
-  setRole: (id: string, role: "admin" | "user") => {
-    users = users.map((u) => (u.id === id ? { ...u, role } : u));
-    emitU();
-  },
-  subscribe: (cb: () => void) => {
-    uListeners.add(cb);
-    return () => uListeners.delete(cb);
-  },
-};
-
-export function usePlatformUsers() {
-  return useSyncExternalStore(usersStore.subscribe, usersStore.getAll, () => [] as PlatformUser[]);
+  return useProjectsStore((s) => s.projects);
 }

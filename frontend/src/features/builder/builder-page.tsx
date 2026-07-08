@@ -1,10 +1,11 @@
 ﻿import {
   Fragment,
+  useCallback,
   useEffect,
   useRef,
   useState,
   type CSSProperties,
-  type DragEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useMutation } from "@tanstack/react-query";
@@ -90,8 +91,19 @@ import {
 } from "@/components/ui/dialog";
 import { addAssetFromDataUrl, useMediaLibrary, type LibraryAsset } from "@/store/media-store";
 import { projectsStore, useProjects, type Project } from "@/store/projects-store";
+import { builderStore } from "@/store/builder-store";
 import { createPage } from "@/services/page.service";
 import { slugForBackend } from "@/utils/string";
+import {
+  BuilderDndProvider,
+  CanvasDraggable,
+  DropArea,
+  DropGap,
+  PaletteDraggable,
+  handleDragEnd,
+  paletteTypeFromId,
+  type DragEndContext,
+} from "./builder-dnd";
 import { Link, useSearch } from "@tanstack/react-router";
 
 function useProjectContext(projectId?: string) {
@@ -530,6 +542,20 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+/** Ensure every node has props + children (IndexedDB / API data may omit them). */
+function normalizeNode(node: BuilderElement): BuilderElement {
+  return {
+    ...node,
+    props: node.props ?? {},
+    children: (node.children ?? []).map(normalizeNode),
+  };
+}
+
+function normalizeTree(nodes: BuilderElement[] | undefined | null): BuilderElement[] {
+  if (!Array.isArray(nodes)) return [];
+  return nodes.map(normalizeNode);
+}
+
 function makeElement(type: ElementType): BuilderElement {
   if (type === "grid") return makeGrid(2);
   return { id: uid(), type, props: { ...defaults[type] }, children: [] };
@@ -564,8 +590,8 @@ function insertInto(
   if (parentId === null) return [...tree, node];
   return tree.map((el) =>
     el.id === parentId
-      ? { ...el, children: [...el.children, node] }
-      : { ...el, children: insertInto(el.children, parentId, node) },
+      ? { ...el, children: [...(el.children ?? []), node] }
+      : { ...el, children: insertInto(el.children ?? [], parentId, node) },
   );
 }
 
@@ -576,20 +602,20 @@ function updateNode(
 ): BuilderElement[] {
   return tree.map((el) => {
     if (el.id === id) return fn(el);
-    return { ...el, children: updateNode(el.children, id, fn) };
+    return { ...el, children: updateNode(el.children ?? [], id, fn) };
   });
 }
 
 function removeNode(tree: BuilderElement[], id: string): BuilderElement[] {
   return tree
     .filter((el) => el.id !== id)
-    .map((el) => ({ ...el, children: removeNode(el.children, id) }));
+    .map((el) => ({ ...el, children: removeNode(el.children ?? [], id) }));
 }
 
 function findNode(tree: BuilderElement[], id: string): BuilderElement | null {
   for (const el of tree) {
     if (el.id === id) return el;
-    const c = findNode(el.children, id);
+    const c = findNode(el.children ?? [], id);
     if (c) return c;
   }
   return null;
@@ -608,16 +634,16 @@ function insertAtIndex(
   }
   return tree.map((el) => {
     if (el.id === parentId) {
-      const copy = [...el.children];
+      const copy = [...(el.children ?? [])];
       copy.splice(Math.max(0, Math.min(index, copy.length)), 0, node);
       return { ...el, children: copy };
     }
-    return { ...el, children: insertAtIndex(el.children, parentId, index, node) };
+    return { ...el, children: insertAtIndex(el.children ?? [], parentId, index, node) };
   });
 }
 
 function containsDescendant(node: BuilderElement, id: string): boolean {
-  return node.children.some((c) => c.id === id || containsDescendant(c, id));
+  return (node.children ?? []).some((c) => c.id === id || containsDescendant(c, id));
 }
 
 function moveNode(
@@ -637,8 +663,8 @@ function moveNode(
   const findSiblings = (nodes: BuilderElement[], pid: string | null): BuilderElement[] | null => {
     if (pid === null) return nodes;
     for (const n of nodes) {
-      if (n.id === pid) return n.children;
-      const r = findSiblings(n.children, pid);
+      if (n.id === pid) return n.children ?? [];
+      const r = findSiblings(n.children ?? [], pid);
       if (r) return r;
     }
     return null;
@@ -653,8 +679,6 @@ function moveNode(
   return insertAtIndex(without, targetParentId, adjustedIndex, dragged);
 }
 
-const MOVE_MIME = "application/x-builder-move-id";
-
 export function Builder() {
   const saveMutation = useMutation({ mutationFn: createPage });
   const search = useSearch({ from: "/" });
@@ -664,7 +688,6 @@ export function Builder() {
   const [past, setPast] = useState<BuilderElement[][]>([]);
   const [future, setFuture] = useState<BuilderElement[][]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
   const [viewport, setViewport] = useState<Viewport>("desktop");
   const [globals, setGlobals] = useState<GlobalStyles>(DEFAULT_GLOBALS);
   const [globalsOpen, setGlobalsOpen] = useState(false);
@@ -689,7 +712,7 @@ export function Builder() {
           id: p.id,
           title: p.title,
           slug: p.slug,
-          canvasNodes: (p.canvasNodes as BuilderElement[] | undefined) ?? [],
+          canvasNodes: normalizeTree(p.canvasNodes as BuilderElement[] | undefined),
         }),
       );
     }
@@ -708,6 +731,16 @@ export function Builder() {
   const [pagesOpen, setPagesOpen] = useState(false);
   const [addPageOpen, setAddPageOpen] = useState(false);
   const [editPage, setEditPage] = useState<Page | null>(null);
+
+  // Load standalone layout from IndexedDB (non-project mode).
+  useEffect(() => {
+    if (projectCtx?.project) return;
+    const saved = builderStore.getStandaloneLayout();
+    if (saved.length > 0 && elements.length === 0) {
+      setElements(normalizeTree(saved as BuilderElement[]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectCtx?.project]);
 
   // When in project mode, mirror local pages back to the shared projects store
   // so page manager edits (add / rename / delete / canvas changes) persist per project.
@@ -729,7 +762,7 @@ export function Builder() {
     if (!projectCtx?.project) return;
     const target = pages.find((p) => p.id === activePageId);
     if (target && target.canvasNodes.length > 0 && elements.length === 0) {
-      setElements(target.canvasNodes);
+      setElements(normalizeTree(target.canvasNodes));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -757,13 +790,14 @@ export function Builder() {
   const activePage = pages.find((p) => p.id === activePageId) ?? pages[0];
 
   const loadPageIntoCanvas = (nodes: BuilderElement[]) => {
+    const normalized = normalizeTree(nodes);
     // Completely clear then reload the canvas with the target page's nodes.
     setElements([]);
     setPast([]);
     setFuture([]);
     setSelectedId(null);
     // Defer to next tick so the clear commits before the reload.
-    queueMicrotask(() => setElements(nodes));
+    queueMicrotask(() => setElements(normalized));
   };
 
   const switchPage = (id: string) => {
@@ -826,7 +860,7 @@ export function Builder() {
   const commit = (next: BuilderElement[]) => {
     setPast((p) => [...p, elements]);
     setFuture([]);
-    setElements(next);
+    setElements(normalizeTree(next));
   };
 
   const commitWithPrior = (prior: BuilderElement[], next: BuilderElement[]) => {
@@ -853,55 +887,23 @@ export function Builder() {
     if (selectedId && !findNode(next, selectedId)) setSelectedId(null);
   };
 
-  const onPaletteDragStart = (e: DragEvent, type: ElementType) => {
-    e.dataTransfer.setData("application/x-builder-type", type);
-    e.dataTransfer.effectAllowed = "copy";
-  };
+  const onDragEnd = useCallback(
+    (event: Parameters<typeof handleDragEnd>[0]) => {
+      handleDragEnd(event, {
+        elements,
+        commit: (next) => commit(next as BuilderElement[]),
+        setSelectedId,
+        onRequestRowLayout: (parentId) => setPendingRowParent({ parentId }),
+        makeElement,
+        findNode: findNode as DragEndContext["findNode"],
+        insertInto: insertInto as DragEndContext["insertInto"],
+        insertAtIndex: insertAtIndex as DragEndContext["insertAtIndex"],
+        moveNode: moveNode as DragEndContext["moveNode"],
+      });
+    },
+    [elements, commit],
+  );
 
-  const dropOnto = (e: DragEvent, parentId: string | null) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(false);
-    const moveId = e.dataTransfer.getData(MOVE_MIME);
-    if (moveId) {
-      // Drop existing element into a container's empty area â†’ append.
-      const dragged = findNode(elements, moveId);
-      if (!dragged) return;
-      if (parentId === moveId) return;
-      if (parentId && containsDescendant(dragged, parentId)) return;
-      const parent = parentId ? findNode(elements, parentId) : null;
-      const len = parent ? parent.children.length : elements.length;
-      commit(moveNode(elements, moveId, parentId, len));
-      return;
-    }
-    const type = e.dataTransfer.getData("application/x-builder-type") as ElementType;
-    if (!type || type === "column") return;
-    if (parentId !== null) {
-      const parent = findNode(elements, parentId);
-      if (!parent) return;
-      const isContainer =
-        parent.type === "section" ||
-        parent.type === "fullSection" ||
-        parent.type === "column" ||
-        parent.type === "card";
-      if (!isContainer) return;
-      // Rows are top-level / section-level only â€” not inside a column.
-      if ((type === "row" || type === "grid") && parent.type === "column") return;
-    }
-    if (type === "row") {
-      setPendingRowParent({ parentId });
-      return;
-    }
-    const node = makeElement(type);
-    commit(insertInto(elements, parentId, node));
-    setSelectedId(node.id);
-  };
-
-  const reorder = (draggedId: string, parentId: string | null, beforeIndex: number) => {
-    const next = moveNode(elements, draggedId, parentId, beforeIndex);
-    if (next === elements) return;
-    commit(next);
-  };
 
   const confirmRowLayout = (template: RowTemplate) => {
     if (!pendingRowParent) return;
@@ -1055,8 +1057,8 @@ export function Builder() {
           description: `${projectCtx.project.name} Â· ${activePage?.title ?? ""}`,
         });
       } else {
-        localStorage.setItem("canvas-builder:layout", JSON.stringify(elements));
-        toast.success("Layout saved", { description: "Tree stored locally." });
+        builderStore.setStandaloneLayout(elements);
+        toast.success("Layout saved", { description: "Tree stored in IndexedDB." });
       }
 
       void saveMutation
@@ -1081,6 +1083,32 @@ export function Builder() {
   };
 
   return (
+    <BuilderDndProvider
+      onDragEnd={onDragEnd}
+      renderOverlay={(activeId) => {
+        if (!activeId) return null;
+        const paletteType = paletteTypeFromId(activeId);
+        if (paletteType) {
+          const item = PALETTE.find((p) => p.type === paletteType);
+          if (item) {
+            return (
+              <div className="rounded-lg border bg-card px-3 py-2 text-sm shadow-lg">
+                {item.label}
+              </div>
+            );
+          }
+        }
+        const dragged = findNode(elements, activeId);
+        if (dragged) {
+          return (
+            <div className="rounded-lg border bg-card px-3 py-2 text-sm shadow-lg">
+              {shortLabel(dragged.type)}
+            </div>
+          );
+        }
+        return null;
+      }}
+    >
     <div className="flex h-screen w-full flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-card/60 px-3 md:px-5 backdrop-blur">
         <div className="flex items-center gap-3">
@@ -1234,22 +1262,8 @@ export function Builder() {
               </p>
             </div>
             <div className="flex-1 space-y-2 overflow-y-auto p-4">
-              {PALETTE.map(({ type, label, icon: Icon, hint }) => (
-                <div
-                  key={type}
-                  draggable
-                  onDragStart={(e) => onPaletteDragStart(e, type)}
-                  className="group flex cursor-grab items-center gap-3 rounded-lg border border-border bg-card p-3 transition-all hover:border-indigo-500/50 hover:bg-accent active:cursor-grabbing"
-                >
-                  <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-foreground">
-                    <Icon className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium leading-tight">{label}</div>
-                    <div className="truncate text-xs text-muted-foreground">{hint}</div>
-                  </div>
-                  <GripVertical className="h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                </div>
+              {PALETTE.map(({ type, label, icon, hint }) => (
+                <PaletteDraggable key={type} type={type} label={label} hint={hint} icon={icon} />
               ))}
             </div>
             <div className="border-t border-border p-4">
@@ -1291,86 +1305,74 @@ export function Builder() {
             }`}
             onClick={() => !isPreviewMode && setSelectedId(null)}
           >
-            <div
-              onDragOver={(e) => {
-                if (isPreviewMode) return;
-                e.preventDefault();
-                setDragOver(true);
-              }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={(e) => {
-                if (isPreviewMode) return;
-                dropOnto(e, null);
-              }}
-              style={
-                {
-                  width: isPreviewMode
+            {(() => {
+              const canvasStyle = {
+                width: isPreviewMode
+                  ? "100%"
+                  : viewport === "desktop"
                     ? "100%"
-                    : viewport === "desktop"
-                      ? "100%"
-                      : viewport === "tablet"
-                        ? 768
-                        : 375,
-                  maxWidth: "100%",
-                  fontFamily: globals.font,
-                  ["--gs-primary" as string]: globals.primary,
-                  ["--gs-secondary" as string]: globals.secondary,
-                  ["--gs-radius" as string]: `${globals.radius}px`,
-                  ["--gs-on-primary" as string]: "#ffffff",
-                  ["--gs-surface" as string]: "#111827",
-                  ["--gs-text" as string]: "#e5e7eb",
-                } as CSSProperties
+                    : viewport === "tablet"
+                      ? 768
+                      : 375,
+                maxWidth: "100%",
+                fontFamily: globals.font,
+                ["--gs-primary" as string]: globals.primary,
+                ["--gs-secondary" as string]: globals.secondary,
+                ["--gs-radius" as string]: `${globals.radius}px`,
+                ["--gs-on-primary" as string]: "#ffffff",
+                ["--gs-surface" as string]: "#111827",
+                ["--gs-text" as string]: "#e5e7eb",
+              } as CSSProperties;
+              const canvasClass = isPreviewMode
+                ? "mx-auto min-h-full transition-[width] duration-500 ease-out"
+                : "mx-auto min-h-full rounded-xl border-2 border-dashed border-border bg-card/30 p-6 transition-[width] duration-500 ease-out";
+
+              if (elements.length === 0) {
+                return (
+                  <DropArea parentId={null} style={canvasStyle} className={canvasClass}>
+                    {isPreviewMode ? (
+                      <div className="flex h-[60vh] flex-col items-center justify-center text-center text-muted-foreground">
+                        <p className="text-sm">Nothing to preview yet.</p>
+                      </div>
+                    ) : (
+                      <div className="flex h-[60vh] flex-col items-center justify-center text-center">
+                        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
+                          <MousePointerClick className="h-6 w-6 text-muted-foreground" />
+                        </div>
+                        <h2 className="text-base font-semibold">Drop components here</h2>
+                        <p className="mt-1 max-w-xs text-sm text-muted-foreground">
+                          Drag any component from the left sidebar. Section containers accept nested
+                          elements.
+                        </p>
+                      </div>
+                    )}
+                  </DropArea>
+                );
               }
-              className={
-                isPreviewMode
-                  ? "mx-auto min-h-full transition-[width] duration-500 ease-out"
-                  : `mx-auto min-h-full rounded-xl border-2 border-dashed bg-card/30 p-6 transition-[width] duration-500 ease-out ${
-                      dragOver ? "border-indigo-500 bg-indigo-500/5" : "border-border"
-                    }`
-              }
-            >
-              {elements.length === 0 ? (
-                isPreviewMode ? (
-                  <div className="flex h-[60vh] flex-col items-center justify-center text-center text-muted-foreground">
-                    <p className="text-sm">Nothing to preview yet.</p>
+
+              return (
+                <div style={canvasStyle} className={canvasClass}>
+                  <div className={isPreviewMode ? "" : "space-y-1"}>
+                    {elements.map((el, i) => (
+                      <Fragment key={el.id}>
+                        {!isPreviewMode && <DropGap parentId={null} index={i} />}
+                        <CanvasNode
+                          node={el}
+                          parentId={null}
+                          index={i}
+                          selectedId={selectedId}
+                          onSelect={setSelectedId}
+                          onSetProp={setNodeProp}
+                          viewport={viewport}
+                          preview={isPreviewMode}
+                        />
+                      </Fragment>
+                    ))}
+                    {!isPreviewMode && <DropGap parentId={null} index={elements.length} />}
                   </div>
-                ) : (
-                  <div className="flex h-[60vh] flex-col items-center justify-center text-center">
-                    <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
-                      <MousePointerClick className="h-6 w-6 text-muted-foreground" />
-                    </div>
-                    <h2 className="text-base font-semibold">Drop components here</h2>
-                    <p className="mt-1 max-w-xs text-sm text-muted-foreground">
-                      Drag any component from the left sidebar. Section containers accept nested
-                      elements.
-                    </p>
-                  </div>
-                )
-              ) : (
-                <div className={isPreviewMode ? "" : "space-y-1"}>
-                  {elements.map((el, i) => (
-                    <Fragment key={el.id}>
-                      {!isPreviewMode && <DropGap parentId={null} index={i} onReorder={reorder} />}
-                      <CanvasNode
-                        node={el}
-                        parentId={null}
-                        index={i}
-                        selectedId={selectedId}
-                        onSelect={setSelectedId}
-                        onDropInto={dropOnto}
-                        onReorder={reorder}
-                        onSetProp={setNodeProp}
-                        viewport={viewport}
-                        preview={isPreviewMode}
-                      />
-                    </Fragment>
-                  ))}
-                  {!isPreviewMode && (
-                    <DropGap parentId={null} index={elements.length} onReorder={reorder} />
-                  )}
                 </div>
-              )}
-            </div>
+              );
+            })()}
           </div>
         </main>
 
@@ -1415,8 +1417,6 @@ export function Builder() {
               <button
                 key={type}
                 type="button"
-                draggable
-                onDragStart={(e) => onPaletteDragStart(e, type)}
                 onClick={() => {
                   if (type === "column") return;
                   if (type === "row") {
@@ -1608,6 +1608,7 @@ export function Builder() {
         }}
       />
     </div>
+    </BuilderDndProvider>
   );
 }
 
@@ -1674,48 +1675,12 @@ function EmptyProps() {
   );
 }
 
-function DropGap({
-  parentId,
-  index,
-  onReorder,
-}: {
-  parentId: string | null;
-  index: number;
-  onReorder: (draggedId: string, parentId: string | null, beforeIndex: number) => void;
-}) {
-  const [active, setActive] = useState(false);
-  return (
-    <div
-      onDragOver={(e) => {
-        if (!Array.from(e.dataTransfer.types).includes(MOVE_MIME)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer.dropEffect = "move";
-        setActive(true);
-      }}
-      onDragLeave={() => setActive(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setActive(false);
-        const id = e.dataTransfer.getData(MOVE_MIME);
-        if (id) onReorder(id, parentId, index);
-      }}
-      className={`transition-all ${
-        active ? "my-1 h-3 rounded-md bg-indigo-500/40 ring-1 ring-indigo-500" : "h-2"
-      }`}
-    />
-  );
-}
-
 function CanvasNode({
   node,
-  parentId,
-  index,
+  parentId: _parentId,
+  index: _index,
   selectedId,
   onSelect,
-  onDropInto,
-  onReorder,
   onSetProp,
   viewport,
   preview = false,
@@ -1725,20 +1690,31 @@ function CanvasNode({
   index: number;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onDropInto: (e: DragEvent, parentId: string | null) => void;
-  onReorder: (draggedId: string, parentId: string | null, beforeIndex: number) => void;
   onSetProp: (id: string, key: string, value: PropValue) => void;
   viewport: Viewport;
   preview?: boolean;
 }) {
   const [hover, setHover] = useState(false);
-  const [dropActive, setDropActive] = useState(false);
   const selected = !preview && node.id === selectedId;
+  const isColumnChild = node.type === "column";
+  const children = node.children ?? [];
 
-  const renderChildren = (children: BuilderElement[]) => (
+  const shellClass = preview
+    ? "relative"
+    : `relative rounded-lg border transition-colors ${
+        isColumnChild ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"
+      } ${
+        selected
+          ? "border-indigo-500 ring-2 ring-indigo-500/30"
+          : hover
+            ? "border-indigo-400/60"
+            : "border-transparent"
+      }`;
+
+  const renderChildren = (childList: BuilderElement[]) => (
     <>
-      {!preview && <DropGap parentId={node.id} index={0} onReorder={onReorder} />}
-      {children.map((child, i) => (
+      {!preview && <DropGap parentId={node.id} index={0} />}
+      {childList.map((child, i) => (
         <Fragment key={child.id}>
           <CanvasNode
             node={child}
@@ -1746,57 +1722,18 @@ function CanvasNode({
             index={i}
             selectedId={selectedId}
             onSelect={onSelect}
-            onDropInto={onDropInto}
-            onReorder={onReorder}
             onSetProp={onSetProp}
             viewport={viewport}
             preview={preview}
           />
-          {!preview && <DropGap parentId={node.id} index={i + 1} onReorder={onReorder} />}
+          {!preview && <DropGap parentId={node.id} index={i + 1} />}
         </Fragment>
       ))}
     </>
   );
 
-  const isColumnChild = node.type === "column";
-
-  return (
-    <div
-      draggable={!preview && !isColumnChild}
-      onDragStart={(e) => {
-        if (preview || isColumnChild) return;
-        e.stopPropagation();
-        e.dataTransfer.setData(MOVE_MIME, node.id);
-        e.dataTransfer.effectAllowed = "move";
-      }}
-      onClick={(e) => {
-        if (preview) return;
-        e.stopPropagation();
-        onSelect(node.id);
-      }}
-      onMouseEnter={(e) => {
-        if (preview) return;
-        e.stopPropagation();
-        setHover(true);
-      }}
-      onMouseLeave={() => {
-        if (preview) return;
-        setHover(false);
-      }}
-      className={
-        preview
-          ? "relative"
-          : `relative rounded-lg border transition-colors ${
-              isColumnChild ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"
-            } ${
-              selected
-                ? "border-indigo-500 ring-2 ring-indigo-500/30"
-                : hover
-                  ? "border-indigo-400/60"
-                  : "border-transparent"
-            }`
-      }
-    >
+  const content = (
+    <>
       {!preview && (hover || selected) && (
         <div className="pointer-events-none absolute -top-5 left-0 z-10 rounded-t-md bg-indigo-500 px-2 py-0.5 text-[10px] font-medium text-white shadow">
           {shortLabel(node.type)}
@@ -1808,54 +1745,36 @@ function CanvasNode({
           <FullSectionRender
             node={node}
             viewport={viewport}
-            dropActive={dropActive}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setDropActive(true);
-            }}
-            onDragLeave={() => setDropActive(false)}
-            onDrop={(e) => {
-              setDropActive(false);
-              onDropInto(e, node.id);
-            }}
+            containerParentId={node.id}
+            isEmpty={children.length === 0}
           >
-            {node.children.length === 0 ? (
+            {children.length === 0 ? (
               <div className="flex min-h-[80px] items-center justify-center text-xs text-muted-foreground/80">
                 Drop elements inside this full-width section
               </div>
             ) : (
-              <div className="space-y-1">{renderChildren(node.children)}</div>
+              <div className="space-y-1">{renderChildren(children)}</div>
             )}
           </FullSectionRender>
         ) : (
           <SectionRender
             node={node}
             viewport={viewport}
-            dropActive={dropActive}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setDropActive(true);
-            }}
-            onDragLeave={() => setDropActive(false)}
-            onDrop={(e) => {
-              setDropActive(false);
-              onDropInto(e, node.id);
-            }}
+            containerParentId={node.id}
+            isEmpty={children.length === 0}
           >
-            {node.children.length === 0 ? (
+            {children.length === 0 ? (
               <div className="flex min-h-[80px] items-center justify-center rounded-md border border-dashed border-border/70 text-xs text-muted-foreground">
                 Drop elements inside this section
               </div>
             ) : (
-              <div className="space-y-1">{renderChildren(node.children)}</div>
+              <div className="space-y-1">{renderChildren(children)}</div>
             )}
           </SectionRender>
         )
       ) : node.type === "row" ? (
         <RowRender node={node} viewport={viewport}>
-          {node.children.map((child, i) => (
+          {children.map((child, i) => (
             <CanvasNode
               key={child.id}
               node={child}
@@ -1863,8 +1782,6 @@ function CanvasNode({
               index={i}
               selectedId={selectedId}
               onSelect={onSelect}
-              onDropInto={onDropInto}
-              onReorder={onReorder}
               onSetProp={onSetProp}
               viewport={viewport}
               preview={preview}
@@ -1873,7 +1790,7 @@ function CanvasNode({
         </RowRender>
       ) : node.type === "grid" ? (
         <GridRender node={node} viewport={viewport}>
-          {node.children.map((child, i) => (
+          {children.map((child, i) => (
             <CanvasNode
               key={child.id}
               node={child}
@@ -1881,8 +1798,6 @@ function CanvasNode({
               index={i}
               selectedId={selectedId}
               onSelect={onSelect}
-              onDropInto={onDropInto}
-              onReorder={onReorder}
               onSetProp={onSetProp}
               viewport={viewport}
               preview={preview}
@@ -1892,24 +1807,15 @@ function CanvasNode({
       ) : node.type === "column" ? (
         <ColumnRender
           node={node}
-          dropActive={dropActive}
-          onDragOver={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setDropActive(true);
-          }}
-          onDragLeave={() => setDropActive(false)}
-          onDrop={(e) => {
-            setDropActive(false);
-            onDropInto(e, node.id);
-          }}
+          containerParentId={node.id}
+          isEmpty={children.length === 0}
         >
-          {node.children.length === 0 ? (
+          {children.length === 0 ? (
             <div className="flex min-h-[80px] items-center justify-center text-[11px] text-muted-foreground">
               Drop here
             </div>
           ) : (
-            <div className="space-y-1">{renderChildren(node.children)}</div>
+            <div className="space-y-1">{renderChildren(children)}</div>
           )}
         </ColumnRender>
       ) : node.type === "accordion" ? (
@@ -1934,60 +1840,85 @@ function CanvasNode({
         <CardRender
           node={node}
           viewport={viewport}
-          dropActive={dropActive}
-          onDragOver={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setDropActive(true);
-          }}
-          onDragLeave={() => setDropActive(false)}
-          onDrop={(e) => {
-            setDropActive(false);
-            onDropInto(e, node.id);
-          }}
+          containerParentId={node.id}
+          isEmpty={!Boolean(node.props.productMode) && children.length === 0}
         >
           {Boolean(node.props.productMode) ? (
             <ProductCardContent node={node} />
-          ) : node.children.length === 0 ? (
+          ) : children.length === 0 ? (
             <div className="flex min-h-[80px] items-center justify-center rounded-md border border-dashed border-border/60 text-xs text-muted-foreground">
               Drop elements inside this card
             </div>
           ) : (
-            <div className="space-y-1">{renderChildren(node.children)}</div>
+            <div className="space-y-1">{renderChildren(children)}</div>
           )}
         </CardRender>
       ) : (
         <LeafRender node={node} viewport={viewport} />
       )}
-    </div>
+    </>
+  );
+
+  const handleClick = (e: ReactMouseEvent) => {
+    if (preview) return;
+    e.stopPropagation();
+    onSelect(node.id);
+  };
+
+  if (preview || isColumnChild) {
+    return (
+      <div
+        className={shellClass}
+        onClick={handleClick}
+        onMouseEnter={(e) => {
+          if (preview) return;
+          e.stopPropagation();
+          setHover(true);
+        }}
+        onMouseLeave={() => {
+          if (preview) return;
+          setHover(false);
+        }}
+      >
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <CanvasDraggable id={node.id} className={shellClass}>
+      <div
+        onClick={handleClick}
+        onMouseEnter={(e) => {
+          e.stopPropagation();
+          setHover(true);
+        }}
+        onMouseLeave={() => setHover(false)}
+      >
+        {content}
+      </div>
+    </CanvasDraggable>
   );
 }
 
 function SectionRender({
   node,
   viewport,
+  containerParentId,
+  isEmpty,
   children,
-  dropActive,
-  onDragOver,
-  onDragLeave,
-  onDrop,
 }: {
   node: BuilderElement;
   viewport: Viewport;
+  containerParentId: string;
+  isEmpty: boolean;
   children: React.ReactNode;
-  dropActive: boolean;
-  onDragOver: (e: DragEvent) => void;
-  onDragLeave: () => void;
-  onDrop: (e: DragEvent) => void;
 }) {
   const p = node.props;
   const bg = String(p.background ?? "").trim();
   const vp = useEffectiveViewport(viewport);
-  return (
+  const shell = (
     <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
       style={{
         padding: Number(readResp(p.padding, vp)),
         background: bg || "var(--gs-surface)",
@@ -1996,31 +1927,34 @@ function SectionRender({
         transition:
           "padding 300ms ease, min-height 300ms ease, border-radius 200ms ease, background 200ms ease",
       }}
-      className={`border ${
-        dropActive ? "border-indigo-500 ring-2 ring-indigo-500/40" : "border-border/60"
-      }`}
     >
       {children}
     </div>
   );
+
+  if (isEmpty) {
+    return (
+      <DropArea parentId={containerParentId} className="border border-border/60">
+        {shell}
+      </DropArea>
+    );
+  }
+
+  return <div className="border border-border/60">{shell}</div>;
 }
 
 function CardRender({
   node,
   viewport,
+  containerParentId,
+  isEmpty,
   children,
-  dropActive,
-  onDragOver,
-  onDragLeave,
-  onDrop,
 }: {
   node: BuilderElement;
   viewport: Viewport;
+  containerParentId: string;
+  isEmpty: boolean;
   children: React.ReactNode;
-  dropActive: boolean;
-  onDragOver: (e: DragEvent) => void;
-  onDragLeave: () => void;
-  onDrop: (e: DragEvent) => void;
 }) {
   const p = node.props;
   const bg = String(p.background ?? "").trim();
@@ -2028,11 +1962,8 @@ function CardRender({
   const padding = Number(readResp(p.padding, viewport) || 24);
   const shadow = Boolean(p.shadow);
   const isProduct = Boolean(p.productMode);
-  return (
+  const shell = (
     <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
       style={{
         background: bg || "var(--gs-surface, rgba(255,255,255,0.04))",
         borderRadius: radius,
@@ -2042,13 +1973,20 @@ function CardRender({
           "background 200ms ease, border-radius 200ms ease, box-shadow 200ms ease, padding 200ms ease",
         overflow: "hidden",
       }}
-      className={`border ${
-        dropActive ? "border-indigo-500 ring-2 ring-indigo-500/40" : "border-white/5"
-      }`}
     >
       {children}
     </div>
   );
+
+  if (isEmpty) {
+    return (
+      <DropArea parentId={containerParentId} className="border border-white/5">
+        {shell}
+      </DropArea>
+    );
+  }
+
+  return <div className="border border-white/5">{shell}</div>;
 }
 
 function ProductCardContent({ node }: { node: BuilderElement }) {
@@ -2134,30 +2072,23 @@ function ProductCardContent({ node }: { node: BuilderElement }) {
 function FullSectionRender({
   node,
   viewport,
+  containerParentId,
+  isEmpty,
   children,
-  dropActive,
-  onDragOver,
-  onDragLeave,
-  onDrop,
 }: {
   node: BuilderElement;
   viewport: Viewport;
+  containerParentId: string;
+  isEmpty: boolean;
   children: React.ReactNode;
-  dropActive: boolean;
-  onDragOver: (e: DragEvent) => void;
-  onDragLeave: () => void;
-  onDrop: (e: DragEvent) => void;
 }) {
   const p = node.props;
   const bg = String(p.background ?? "").trim();
   const bgImage = String(p.backgroundImage ?? "").trim();
   const vp = useEffectiveViewport(viewport);
   const isMobileEff = vp === "mobile";
-  return (
+  const shell = (
     <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
       style={{
         paddingTop: Number(readResp(p.paddingTop, vp)),
         paddingBottom: Number(readResp(p.paddingBottom, vp)),
@@ -2170,13 +2101,23 @@ function FullSectionRender({
         width: "100%",
         transition: "padding 300ms ease, background 200ms ease",
       }}
-      className={`w-full border-2 border-dashed ${
-        dropActive ? "border-indigo-500 ring-2 ring-indigo-500/40" : "border-border/70"
-      }`}
     >
       {children}
     </div>
   );
+
+  if (isEmpty) {
+    return (
+      <DropArea
+        parentId={containerParentId}
+        className="w-full border-2 border-dashed border-border/70"
+      >
+        {shell}
+      </DropArea>
+    );
+  }
+
+  return <div className="w-full border-2 border-dashed border-border/70">{shell}</div>;
 }
 
 function LeafRender({ node, viewport }: { node: BuilderElement; viewport: Viewport }) {
@@ -4062,28 +4003,28 @@ function GridRender({
 
 function ColumnRender({
   node: _node,
+  containerParentId,
+  isEmpty,
   children,
-  dropActive,
-  onDragOver,
-  onDragLeave,
-  onDrop,
 }: {
   node: BuilderElement;
+  containerParentId: string;
+  isEmpty: boolean;
   children: React.ReactNode;
-  dropActive: boolean;
-  onDragOver: (e: DragEvent) => void;
-  onDragLeave: () => void;
-  onDrop: (e: DragEvent) => void;
 }) {
+  if (isEmpty) {
+    return (
+      <DropArea
+        parentId={containerParentId}
+        className="h-full rounded-md border border-dashed border-border/70 bg-background/20 p-3 transition-colors"
+      >
+        {children}
+      </DropArea>
+    );
+  }
+
   return (
-    <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      className={`h-full rounded-md border border-dashed p-3 transition-colors ${
-        dropActive ? "border-indigo-500 bg-indigo-500/10" : "border-border/70 bg-background/20"
-      }`}
-    >
+    <div className="h-full rounded-md border border-dashed border-border/70 bg-background/20 p-3 transition-colors">
       {children}
     </div>
   );

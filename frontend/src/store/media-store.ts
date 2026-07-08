@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
+
+import { createIndexedDBStorage } from "@/lib/indexeddb-storage";
 
 export type AssetKind = "logo" | "icon" | "image";
 
@@ -13,9 +16,6 @@ export type LibraryAsset = {
   size: number;
   createdAt: number;
 };
-
-const STORAGE_KEY = "creative:media-library:v1";
-const EVENT_NAME = "creative:media-library:changed";
 
 const SEED: LibraryAsset[] = [
   {
@@ -64,29 +64,6 @@ const SEED: LibraryAsset[] = [
   },
 ];
 
-function read(): LibraryAsset[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return SEED;
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-function write(next: LibraryAsset[]) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  window.dispatchEvent(new CustomEvent(EVENT_NAME));
-}
-
-export function getAssets(): LibraryAsset[] {
-  return read();
-}
-
 export function classifyKind(width: number, height: number, format: string, name = ""): AssetKind {
   const fmt = format.toLowerCase();
   if (fmt === "svg") return width && width <= 256 && height <= 256 ? "icon" : "logo";
@@ -115,53 +92,90 @@ export function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+type MediaState = {
+  assets: LibraryAsset[];
+  addFromDataUrl: (input: {
+    name: string;
+    url: string;
+    size?: number;
+    format?: string;
+  }) => Promise<LibraryAsset>;
+  addFromFile: (file: File) => Promise<LibraryAsset>;
+  deleteAsset: (id: string) => void;
+};
+
+export const useMediaStore = create<MediaState>()(
+  persist(
+    (set, get) => ({
+      assets: SEED,
+
+      addFromDataUrl: async (input) => {
+        const ext = (input.format || input.name.split(".").pop() || "").toLowerCase();
+        const meta = await readImageMeta(input.url);
+        const asset: LibraryAsset = {
+          id:
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: input.name,
+          url: input.url,
+          format: ext.toUpperCase() || "IMG",
+          width: meta.width,
+          height: meta.height,
+          size: input.size || 0,
+          kind: classifyKind(meta.width, meta.height, ext, input.name),
+          createdAt: Date.now(),
+        };
+        set({ assets: [asset, ...get().assets] });
+        return asset;
+      },
+
+      addFromFile: async (file) => {
+        const url = await fileToDataUrl(file);
+        const ext = (file.name.split(".").pop() || "").toLowerCase();
+        return get().addFromDataUrl({ name: file.name, url, size: file.size, format: ext });
+      },
+
+      deleteAsset: (id) => set({ assets: get().assets.filter((a) => a.id !== id) }),
+    }),
+    {
+      name: "creative:media-library:v1",
+      storage: createJSONStorage(() => createIndexedDBStorage()),
+      skipHydration: true,
+      partialize: (state) => ({ assets: state.assets }),
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<MediaState>),
+        assets:
+          (persisted as MediaState | undefined)?.assets?.length
+            ? (persisted as MediaState).assets
+            : current.assets,
+      }),
+    },
+  ),
+);
+
+export function getAssets(): LibraryAsset[] {
+  return useMediaStore.getState().assets;
+}
+
 export async function addAssetFromDataUrl(input: {
   name: string;
   url: string;
   size?: number;
   format?: string;
 }): Promise<LibraryAsset> {
-  const ext = (input.format || input.name.split(".").pop() || "").toLowerCase();
-  const meta = await readImageMeta(input.url);
-  const asset: LibraryAsset = {
-    id:
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name: input.name,
-    url: input.url,
-    format: ext.toUpperCase() || "IMG",
-    width: meta.width,
-    height: meta.height,
-    size: input.size || 0,
-    kind: classifyKind(meta.width, meta.height, ext, input.name),
-    createdAt: Date.now(),
-  };
-  const current = read();
-  write([asset, ...current]);
-  return asset;
+  return useMediaStore.getState().addFromDataUrl(input);
 }
 
 export async function addAssetFromFile(file: File): Promise<LibraryAsset> {
-  const url = await fileToDataUrl(file);
-  const ext = (file.name.split(".").pop() || "").toLowerCase();
-  return addAssetFromDataUrl({ name: file.name, url, size: file.size, format: ext });
+  return useMediaStore.getState().addFromFile(file);
 }
 
 export function deleteAsset(id: string) {
-  write(read().filter((a) => a.id !== id));
+  useMediaStore.getState().deleteAsset(id);
 }
 
 export function useMediaLibrary(): LibraryAsset[] {
-  const [assets, setAssets] = useState<LibraryAsset[]>(() => read());
-  useEffect(() => {
-    const sync = () => setAssets(read());
-    window.addEventListener(EVENT_NAME, sync);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener(EVENT_NAME, sync);
-      window.removeEventListener("storage", sync);
-    };
-  }, []);
-  return assets;
+  return useMediaStore((s) => s.assets);
 }
