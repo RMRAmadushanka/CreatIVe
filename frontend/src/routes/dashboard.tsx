@@ -1,4 +1,4 @@
-import { createFileRoute, Outlet, useNavigate, Link, useRouterState } from "@tanstack/react-router";
+import { createFileRoute, Outlet, Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 import {
   SidebarProvider,
@@ -16,6 +16,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
+import { PageLoading } from "@/components/layout/PageLoading";
 import {
   FolderKanban,
   User as UserIcon,
@@ -26,9 +27,14 @@ import {
   Shield,
   Layers,
 } from "lucide-react";
-import { authStore, useAuth, useAuthReady } from "@/store/auth-store";
+import { authStore, useAuth, useAuthReady, type AuthUser } from "@/store/auth-store";
+import { requireAuth } from "@/lib/auth-guards";
 
 export const Route = createFileRoute("/dashboard")({
+  beforeLoad: async () => {
+    const authUser = await requireAuth();
+    return { authUser };
+  },
   head: () => ({
     meta: [
       { title: "Dashboard — CMS" },
@@ -39,15 +45,21 @@ export const Route = createFileRoute("/dashboard")({
 });
 
 function DashboardLayout() {
-  const user = useAuth();
-  const authReady = useAuthReady();
   const navigate = useNavigate();
+  const { authUser } = Route.useRouteContext();
+  const sessionUser = useAuth();
+  const authReady = useAuthReady();
+  const user = sessionUser ?? authUser;
 
   useEffect(() => {
-    if (authReady && !user) navigate({ to: "/auth" });
+    if (authReady && !user) {
+      void navigate({ to: "/auth", search: { redirect: window.location.href } });
+    }
   }, [authReady, user, navigate]);
 
-  if (!authReady || !user) return null;
+  if (!user) {
+    return <PageLoading label={authReady ? "Redirecting to sign in…" : "Checking session…"} />;
+  }
 
   return (
     <SidebarProvider>
@@ -77,7 +89,7 @@ function DashboardLayout() {
                 variant="outline"
                 onClick={async () => {
                   await authStore.signOut();
-                  navigate({ to: "/auth" });
+                  window.location.href = "/auth";
                 }}
               >
                 <LogOut className="h-4 w-4" /> Sign out
@@ -109,7 +121,7 @@ function AppSidebar({
   name,
   email,
 }: {
-  role: "admin" | "user";
+  role: AuthUser["role"];
   name: string;
   email: string;
 }) {

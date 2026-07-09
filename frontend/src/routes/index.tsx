@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Builder } from "@/features/builder";
+import { requireAuth } from "@/lib/auth-guards";
 
 export const Route = createFileRoute("/")({
+  beforeLoad: ({ location }) => requireAuth({ returnTo: location.href }),
   head: () => ({
     meta: [
       { title: "Canvas — Drag & Drop Page Builder" },

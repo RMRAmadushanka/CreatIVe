@@ -777,6 +777,12 @@ export function Builder() {
     });
   }, [elements, activePageId]);
 
+  // In standalone mode, keep IndexedDB layout in sync live (so Clear all persists immediately).
+  useEffect(() => {
+    if (projectCtx?.project) return;
+    builderStore.setStandaloneLayout(elements);
+  }, [elements, projectCtx?.project]);
+
   const slugify = (s: string) =>
     "/" +
     s

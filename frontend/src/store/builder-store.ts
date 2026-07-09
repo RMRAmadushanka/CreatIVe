@@ -1,16 +1,15 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 
 import type { BuilderElement } from "@/features/builder/types";
-import { createIndexedDBStorage } from "@/lib/indexeddb-storage";
+import { idbStorage } from "@/store/idb";
 
-type BuilderPersistState = {
-  /** Standalone builder layout (when not editing a project). */
+type BuilderState = {
   standaloneLayout: BuilderElement[];
   setStandaloneLayout: (elements: BuilderElement[]) => void;
 };
 
-export const useBuilderStore = create<BuilderPersistState>()(
+export const useBuilderStore = create<BuilderState>()(
   persist(
     (set) => ({
       standaloneLayout: [],
@@ -18,7 +17,7 @@ export const useBuilderStore = create<BuilderPersistState>()(
     }),
     {
       name: "canvas-builder:layout",
-      storage: createJSONStorage(() => createIndexedDBStorage()),
+      storage: idbStorage,
       skipHydration: true,
       partialize: (state) => ({ standaloneLayout: state.standaloneLayout }),
     },

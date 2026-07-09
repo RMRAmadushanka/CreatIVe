@@ -1,5 +1,5 @@
-import { useNavigate, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,8 +7,38 @@ import { toast } from "sonner";
 import { authStore, useAuth, useAuthReady } from "@/store/auth-store";
 import { ShieldCheck } from "lucide-react";
 
+function resolvePostLoginTarget(redirect?: string): {
+  to: "/dashboard" | "/" | "/media-library";
+  search?: Record<string, string>;
+} {
+  if (!redirect) {
+    return { to: "/dashboard" };
+  }
+
+  try {
+    const url = new URL(redirect, window.location.origin);
+    if (url.origin !== window.location.origin || url.pathname.startsWith("/auth")) {
+      return { to: "/dashboard" };
+    }
+
+    const search = Object.fromEntries(url.searchParams.entries());
+    const to = url.pathname as "/dashboard" | "/" | "/media-library";
+    if (to !== "/" && to !== "/dashboard" && to !== "/media-library") {
+      return { to: "/dashboard" };
+    }
+
+    return {
+      to,
+      search: Object.keys(search).length > 0 ? search : undefined,
+    };
+  } catch {
+    return { to: "/dashboard" };
+  }
+}
+
 export function AuthPage() {
   const navigate = useNavigate();
+  const { redirect } = useSearch({ from: "/auth" });
   const user = useAuth();
   const authReady = useAuthReady();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
@@ -16,10 +46,34 @@ export function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const didRedirect = useRef(false);
 
+  const goAfterLogin = () => {
+    if (didRedirect.current) return;
+    didRedirect.current = true;
+
+    const target = resolvePostLoginTarget(redirect);
+    if (target.to === "/") {
+      void navigate({
+        to: "/",
+        search: {
+          project: target.search?.project,
+          page: target.search?.page,
+        },
+      });
+      return;
+    }
+
+    void navigate({ to: target.to, search: target.search });
+  };
+
+  // If already signed in (e.g. returned to /auth by mistake), go to app once.
   useEffect(() => {
-    if (authReady && user) navigate({ to: "/dashboard" });
-  }, [authReady, user, navigate]);
+    if (authReady && user && !busy) {
+      goAfterLogin();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authReady, user, busy]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,7 +92,7 @@ export function AuthPage() {
       toast.success(`Welcome, ${signedInUser.name}!`, {
         description: `Signed in as ${signedInUser.role}`,
       });
-      navigate({ to: "/dashboard" });
+      goAfterLogin();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Authentication failed";
       toast.error(message);
@@ -59,9 +113,7 @@ export function AuthPage() {
               {mode === "signin" ? "Welcome back" : "Create your account"}
             </h1>
             <p className="text-xs text-muted-foreground">
-              {mode === "signin"
-                ? "Sign in with your Supabase account"
-                : "Create a Supabase-backed account"}
+              Sign in to use the page builder and dashboard.
             </p>
           </div>
         </div>
@@ -88,10 +140,6 @@ export function AuthPage() {
               placeholder="you@example.com"
               autoComplete="email"
             />
-            <p className="text-[11px] text-muted-foreground">
-              Emails starting with <code className="rounded bg-muted px-1">admin</code> are stored
-              with the admin role in user metadata.
-            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="password">Password</Label>
@@ -134,16 +182,6 @@ export function AuthPage() {
               </button>
             </>
           )}
-        </div>
-
-        <div className="mt-4 text-center">
-          <Link
-            to="/"
-            search={{ project: undefined, page: undefined }}
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            ← Back to home
-          </Link>
         </div>
       </div>
     </div>

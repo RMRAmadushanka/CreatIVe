@@ -17,6 +17,7 @@ export async function createPage(body: CreatePageRequest): Promise<Page> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    requireAuth: true,
   });
   return parseOrThrow<Page>(res);
 }

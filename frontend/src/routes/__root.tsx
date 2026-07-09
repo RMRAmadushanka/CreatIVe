@@ -3,7 +3,7 @@ import { Outlet, createRootRouteWithContext, HeadContent, Scripts } from "@tanst
 import type { ReactNode } from "react";
 
 import appCss from "../styles.css?url";
-import { StoreHydrator } from "@/components/StoreHydrator";
+import { StoreProvider } from "@/store/StoreProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { AppHeader } from "@/components/layout/AppHeader";
 import { ErrorPage } from "@/components/layout/ErrorPage";
@@ -53,11 +53,11 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <StoreHydrator>
+      <StoreProvider>
         <AppHeader />
         <Outlet />
         <Toaster />
-      </StoreHydrator>
+      </StoreProvider>
     </QueryClientProvider>
   );
 }

@@ -2,6 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AuthPage } from "@/features/auth";
 
 export const Route = createFileRoute("/auth")({
+  validateSearch: (s: Record<string, unknown>) => ({
+    redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Sign in — CMS" },

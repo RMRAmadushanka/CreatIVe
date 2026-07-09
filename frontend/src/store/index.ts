@@ -1,4 +1,4 @@
-export { authStore, mapSessionToUser, useAuth, useAuthReady, useAuthStore } from "@/store/auth-store";
+export { authStore, useAuth, useAuthReady, useAuthStore, useIsAdmin } from "@/store/auth-store";
 export type { AuthUser, Role } from "@/store/auth-store";
 
 export { builderStore, useBuilderStore } from "@/store/builder-store";
@@ -26,4 +26,4 @@ export type { Page, Project } from "@/store/projects-store";
 export { usePlatformUsers, usersStore, useUsersStore } from "@/store/users-store";
 export type { PlatformUser } from "@/store/users-store";
 
-export { hydrateStores } from "@/store/hydrate-stores";
+export { StoreProvider } from "@/store/StoreProvider";

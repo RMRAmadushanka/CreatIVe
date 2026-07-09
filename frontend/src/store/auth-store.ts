@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { syncAuthUser } from "@/services/auth.service";
 
 export type Role = "admin" | "user";
 
@@ -22,14 +23,10 @@ type AuthState = {
   signIn: (email: string, password: string) => Promise<AuthUser>;
   signOut: () => Promise<void>;
   getAccessToken: () => Promise<string | null>;
+  refreshFromBackend: () => Promise<AuthUser | null>;
 };
 
-function readRole(metadata: Record<string, unknown> | undefined): Role {
-  const role = metadata?.role;
-  return role === "admin" ? "admin" : "user";
-}
-
-export function mapSessionToUser(session: Session | null): AuthUser | null {
+function mapSessionToUser(session: Session | null): AuthUser | null {
   const user = session?.user;
   if (!user) return null;
 
@@ -43,13 +40,28 @@ export function mapSessionToUser(session: Session | null): AuthUser | null {
     id: user.id,
     name,
     email: user.email ?? "",
-    role: readRole(metadata),
+    role: "user",
   };
+}
+
+async function mergeBackendRole(base: AuthUser): Promise<AuthUser> {
+  try {
+    const apiUser = await syncAuthUser();
+    if (!apiUser) return base;
+    return {
+      id: apiUser.id,
+      name: apiUser.name,
+      email: apiUser.email,
+      role: apiUser.role,
+    };
+  } catch {
+    return base;
+  }
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
-  isReady: typeof window === "undefined",
+  isReady: false,
   initialized: false,
 
   init: () => {
@@ -61,30 +73,44 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return;
     }
 
-    void supabase.auth.getSession().then(({ data }) => {
-      set({ user: mapSessionToUser(data.session), isReady: true });
+    void supabase.auth.getSession().then(async ({ data }) => {
+      const base = mapSessionToUser(data.session);
+      const user = base ? await mergeBackendRole(base) : null;
+      set({ user, isReady: true });
     });
 
     supabase.auth.onAuthStateChange((_event, session) => {
-      set({ user: mapSessionToUser(session), isReady: true });
+      void (async () => {
+        const base = mapSessionToUser(session);
+        const user = base ? await mergeBackendRole(base) : null;
+        set({ user, isReady: true });
+      })();
     });
+  },
+
+  refreshFromBackend: async () => {
+    const current = get().user;
+    if (!current) return null;
+    const updated = await mergeBackendRole(current);
+    set({ user: updated });
+    return updated;
   },
 
   signUp: async (name, email, password) => {
     if (!isSupabaseConfigured) {
       throw new Error("Supabase is not configured. Add credentials to frontend/.env");
     }
-    const role: Role = email.toLowerCase().startsWith("admin") ? "admin" : "user";
     const { data: result, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { name, role } },
+      options: { data: { name } },
     });
     if (error) throw error;
     if (!result.session) {
       throw new Error("Check your email to confirm your account before signing in.");
     }
-    const mapped = mapSessionToUser(result.session)!;
+    const base = mapSessionToUser(result.session)!;
+    const mapped = await mergeBackendRole(base);
     set({ user: mapped, isReady: true });
     return mapped;
   },
@@ -95,7 +121,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     const { data: result, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    const mapped = mapSessionToUser(result.session)!;
+    const base = mapSessionToUser(result.session)!;
+    const mapped = await mergeBackendRole(base);
     set({ user: mapped, isReady: true });
     return mapped;
   },
@@ -124,10 +151,12 @@ export const authStore = {
     useAuthStore.getState().init();
     return useAuthStore.getState().isReady;
   },
+  init: () => useAuthStore.getState().init(),
   signUp: (...args: Parameters<AuthState["signUp"]>) => useAuthStore.getState().signUp(...args),
   signIn: (...args: Parameters<AuthState["signIn"]>) => useAuthStore.getState().signIn(...args),
   signOut: () => useAuthStore.getState().signOut(),
   getAccessToken: () => useAuthStore.getState().getAccessToken(),
+  refreshFromBackend: () => useAuthStore.getState().refreshFromBackend(),
 };
 
 export function useAuth() {
@@ -146,4 +175,8 @@ export function useAuthReady() {
     init();
   }, [init]);
   return isReady;
+}
+
+export function useIsAdmin(): boolean {
+  return useAuthStore((s) => s.user?.role === "admin");
 }

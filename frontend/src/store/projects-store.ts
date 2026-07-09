@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 
-import { createIndexedDBStorage } from "@/lib/indexeddb-storage";
+import { idbStorage } from "@/store/idb";
 
 export type Page = { id: string; title: string; slug: string; canvasNodes?: unknown[] };
 
@@ -121,22 +121,13 @@ export const useProjectsStore = create<ProjectsState>()(
     }),
     {
       name: "cms.projects",
-      storage: createJSONStorage(() => createIndexedDBStorage()),
+      storage: idbStorage,
       skipHydration: true,
       partialize: (state) => ({ projects: state.projects }),
-      merge: (persisted, current) => ({
-        ...current,
-        ...(persisted as Partial<ProjectsState>),
-        projects:
-          (persisted as ProjectsState | undefined)?.projects?.length
-            ? (persisted as ProjectsState).projects
-            : current.projects,
-      }),
     },
   ),
 );
 
-/** Imperative API for non-React code (builder save, etc.). */
 export const projectsStore = {
   getAll: () => useProjectsStore.getState().projects,
   getByOwner: (email: string) => useProjectsStore.getState().getByOwner(email),

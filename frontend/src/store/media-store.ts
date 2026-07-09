@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 
-import { createIndexedDBStorage } from "@/lib/indexeddb-storage";
+import { idbStorage } from "@/store/idb";
 
 export type AssetKind = "logo" | "icon" | "image";
 
@@ -140,17 +140,9 @@ export const useMediaStore = create<MediaState>()(
     }),
     {
       name: "creative:media-library:v1",
-      storage: createJSONStorage(() => createIndexedDBStorage()),
+      storage: idbStorage,
       skipHydration: true,
       partialize: (state) => ({ assets: state.assets }),
-      merge: (persisted, current) => ({
-        ...current,
-        ...(persisted as Partial<MediaState>),
-        assets:
-          (persisted as MediaState | undefined)?.assets?.length
-            ? (persisted as MediaState).assets
-            : current.assets,
-      }),
     },
   ),
 );

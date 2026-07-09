@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +12,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { projectsStore, useProjects } from "@/store/projects-store";
+import { canAccessProject } from "@/lib/auth-guards";
+import { useAuth } from "@/store/auth-store";
 import { ArrowLeft, Plus, ExternalLink, FileText, Trash2, Globe } from "lucide-react";
 import { toast } from "sonner";
 
@@ -20,21 +22,29 @@ export const Route = createFileRoute("/dashboard/projects/$projectId")({
 });
 
 function ProjectDetail() {
+  const navigate = useNavigate();
   const { projectId } = Route.useParams();
+  const user = useAuth();
   const all = useProjects();
   const project = all.find((p) => p.id === projectId);
-  const navigate = useNavigate();
 
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
+
+  useEffect(() => {
+    if (!user || !project) return;
+    if (!canAccessProject(project, user)) {
+      void navigate({ to: "/dashboard/projects" });
+    }
+  }, [user, project, navigate]);
 
   if (!project) {
     return (
       <div className="mx-auto max-w-2xl rounded-xl border border-border/60 bg-card/60 p-8 text-center">
         <h2 className="text-lg font-semibold">Project not found</h2>
         <p className="mt-1 text-sm text-muted-foreground">This project may have been deleted.</p>
-        <Button className="mt-4" onClick={() => navigate({ to: "/dashboard/projects" })}>
-          Back to projects
+        <Button className="mt-4" asChild>
+          <Link to="/dashboard/projects">Back to projects</Link>
         </Button>
       </div>
     );
@@ -46,6 +56,10 @@ function ProjectDetail() {
     toast.success(`Page "${title}" added`);
     setTitle("");
     setOpen(false);
+  };
+
+  const openInBuilder = (pageId: string) => {
+    void navigate({ to: "/", search: { project: project.id, page: pageId } });
   };
 
   return (
@@ -67,37 +81,42 @@ function ProjectDetail() {
             <p className="text-sm text-muted-foreground">{project.domain}</p>
           </div>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4" /> Add New Page
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add a new page</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-1.5 py-2">
-              <Label htmlFor="ptitle">Page Title</Label>
-              <Input
-                id="ptitle"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="About Us"
-                onKeyDown={(e) => e.key === "Enter" && addPage()}
-              />
-              <p className="text-[11px] text-muted-foreground">
-                A URL slug will be auto-generated.
-              </p>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setOpen(false)}>
-                Cancel
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={() => openInBuilder(project.pages[0].id)}>
+            <ExternalLink className="h-4 w-4" /> Open in Builder
+          </Button>
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline">
+                <Plus className="h-4 w-4" /> Add New Page
               </Button>
-              <Button onClick={addPage}>Add Page</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add a new page</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-1.5 py-2">
+                <Label htmlFor="ptitle">Page Title</Label>
+                <Input
+                  id="ptitle"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="About Us"
+                  onKeyDown={(e) => e.key === "Enter" && addPage()}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  A URL slug will be auto-generated.
+                </p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setOpen(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={addPage}>Add Page</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border/60 bg-card/60">
@@ -117,10 +136,8 @@ function ProjectDetail() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Button asChild size="sm" variant="outline">
-                  <Link to="/" search={{ project: project.id, page: pg.id }}>
-                    <ExternalLink className="h-3.5 w-3.5" /> Open in Builder
-                  </Link>
+                <Button size="sm" variant="outline" onClick={() => openInBuilder(pg.id)}>
+                  <ExternalLink className="h-3.5 w-3.5" /> Open in Builder
                 </Button>
                 <Button
                   size="icon"

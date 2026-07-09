@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { PageLoading } from "@/components/layout/PageLoading";
 import { useAuth } from "@/store/auth-store";
 import { Shield, Mail, User as UserIcon } from "lucide-react";
 
@@ -8,7 +9,11 @@ export const Route = createFileRoute("/dashboard/profile")({
 
 function ProfilePage() {
   const user = useAuth();
-  if (!user) return null;
+
+  if (!user) {
+    return <PageLoading label="Loading profile…" />;
+  }
+
   return (
     <div className="mx-auto max-w-2xl">
       <h1 className="mb-6 text-2xl font-semibold">Profile</h1>

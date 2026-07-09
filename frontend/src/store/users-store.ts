@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 
-import { createIndexedDBStorage } from "@/lib/indexeddb-storage";
+import { idbStorage } from "@/store/idb";
 
 export type PlatformUser = { id: string; name: string; email: string; role: "admin" | "user" };
 
@@ -29,17 +29,9 @@ export const useUsersStore = create<UsersState>()(
     }),
     {
       name: "cms.users",
-      storage: createJSONStorage(() => createIndexedDBStorage()),
+      storage: idbStorage,
       skipHydration: true,
       partialize: (state) => ({ users: state.users }),
-      merge: (persisted, current) => ({
-        ...current,
-        ...(persisted as Partial<UsersState>),
-        users:
-          (persisted as UsersState | undefined)?.users?.length
-            ? (persisted as UsersState).users
-            : current.users,
-      }),
     },
   ),
 );

@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { MediaLibraryPage } from "@/features/media";
+import { requireAuth } from "@/lib/auth-guards";
 
 export const Route = createFileRoute("/media-library")({
+  beforeLoad: () => requireAuth(),
   head: () => ({
     meta: [
       { title: "Media Library — Asset Manager" },

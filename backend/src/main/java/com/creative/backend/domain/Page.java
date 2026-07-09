@@ -36,6 +36,9 @@ public class Page {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    @Column(name = "owner_id", length = 36)
+    private String ownerId;
+
     public Page() {
     }
 
@@ -77,5 +80,13 @@ public class Page {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getOwnerId() {
+        return ownerId;
+    }
+
+    public void setOwnerId(String ownerId) {
+        this.ownerId = ownerId;
     }
 }
