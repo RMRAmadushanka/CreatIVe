@@ -11,7 +11,8 @@ import {
   DialogFooter,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { projectsStore, useProjects } from "@/store/projects-store";
+import { PageLoading } from "@/components/layout/PageLoading";
+import { projectsStore, useProjects, useProjectsStore } from "@/store/projects-store";
 import { canAccessProject } from "@/lib/auth-guards";
 import { useAuth } from "@/store/auth-store";
 import { ArrowLeft, Plus, ExternalLink, FileText, Trash2, Globe } from "lucide-react";
@@ -26,10 +27,19 @@ function ProjectDetail() {
   const { projectId } = Route.useParams();
   const user = useAuth();
   const all = useProjects();
+  const loaded = useProjectsStore((s) => s.loaded);
   const project = all.find((p) => p.id === projectId);
 
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!loaded) {
+      void projectsStore.load().catch((error: Error) => toast.error(error.message));
+    }
+  }, [user?.id, loaded]);
 
   useEffect(() => {
     if (!user || !project) return;
@@ -37,6 +47,10 @@ function ProjectDetail() {
       void navigate({ to: "/dashboard/projects" });
     }
   }, [user, project, navigate]);
+
+  if (!loaded && !project) {
+    return <PageLoading label="Loading project…" />;
+  }
 
   if (!project) {
     return (
@@ -50,12 +64,19 @@ function ProjectDetail() {
     );
   }
 
-  const addPage = () => {
+  const addPage = async () => {
     if (!title.trim()) return;
-    projectsStore.addPage(project.id, title.trim());
-    toast.success(`Page "${title}" added`);
-    setTitle("");
-    setOpen(false);
+    setBusy(true);
+    try {
+      await projectsStore.addPage(project.id, title.trim());
+      toast.success(`Page "${title}" added`);
+      setTitle("");
+      setOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not add page");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const openInBuilder = (pageId: string) => {
@@ -102,7 +123,7 @@ function ProjectDetail() {
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="About Us"
-                  onKeyDown={(e) => e.key === "Enter" && addPage()}
+                  onKeyDown={(e) => e.key === "Enter" && void addPage()}
                 />
                 <p className="text-[11px] text-muted-foreground">
                   A URL slug will be auto-generated.
@@ -112,7 +133,9 @@ function ProjectDetail() {
                 <Button variant="outline" onClick={() => setOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={addPage}>Add Page</Button>
+                <Button onClick={() => void addPage()} disabled={busy}>
+                  {busy ? "Adding…" : "Add Page"}
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -143,8 +166,10 @@ function ProjectDetail() {
                   size="icon"
                   variant="ghost"
                   onClick={() => {
-                    projectsStore.deletePage(project.id, pg.id);
-                    toast.success("Page deleted");
+                    void projectsStore
+                      .deletePage(project.id, pg.id)
+                      .then(() => toast.success("Page deleted"))
+                      .catch((error: Error) => toast.error(error.message));
                   }}
                   disabled={project.pages.length <= 1}
                 >

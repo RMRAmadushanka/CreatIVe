@@ -4,6 +4,11 @@ export const API_ENDPOINTS = {
   pages: "/api/pages",
   pageBySlug: (slug: string) => `/api/pages/${encodeURIComponent(slug)}`,
   pageById: (id: string) => `/api/pages/${encodeURIComponent(id)}`,
+  projects: "/api/projects",
+  projectById: (id: string) => `/api/projects/${encodeURIComponent(id)}`,
+  projectPages: (id: string) => `/api/projects/${encodeURIComponent(id)}/pages`,
+  projectPageById: (projectId: string, pageId: string) =>
+    `/api/projects/${encodeURIComponent(projectId)}/pages/${encodeURIComponent(pageId)}`,
   authMe: "/api/auth/me",
   authSync: "/api/auth/sync",
   adminUsers: "/api/admin/users",

@@ -1,9 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { RequireAuth } from "@/components/auth/RequireAuth";
 import { MediaLibraryPage } from "@/features/media";
-import { requireAuth } from "@/lib/auth-guards";
 
 export const Route = createFileRoute("/media-library")({
-  beforeLoad: () => requireAuth(),
   head: () => ({
     meta: [
       { title: "Media Library — Asset Manager" },
@@ -21,5 +20,13 @@ export const Route = createFileRoute("/media-library")({
       { name: "twitter:card", content: "summary" },
     ],
   }),
-  component: MediaLibraryPage,
+  component: MediaLibraryRoute,
 });
+
+function MediaLibraryRoute() {
+  return (
+    <RequireAuth>
+      <MediaLibraryPage />
+    </RequireAuth>
+  );
+}

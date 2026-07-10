@@ -7,6 +7,7 @@ import com.creative.backend.security.CurrentUserService;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -39,23 +40,53 @@ public class PageController {
         return pageRepository.findByOwnerIdOrderByCreatedAtDesc(user.getId());
     }
 
+    /**
+     * Create or update a page by slug for the current user.
+     * Repeated Save clicks with the same slug update the existing row.
+     */
     @PostMapping
     public ResponseEntity<Page> create(@RequestBody CreatePageRequest request) {
         User user = currentUserService.requireUser();
 
-        Page page = new Page();
-        page.setTitle(request.title());
-        page.setSlug(request.slug());
-        page.setLayoutData(request.layoutData());
-        page.setOwnerId(user.getId());
+        if (request.title() == null || request.title().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Title is required");
+        }
+        if (request.slug() == null || request.slug().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Slug is required");
+        }
 
-        Page saved = pageRepository.save(page);
-        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+        String slug = normalizeSlug(request.slug());
+
+        try {
+            var existing = pageRepository.findBySlug(slug);
+            if (existing.isPresent()) {
+                Page page = existing.get();
+                if (!currentUserService.canAccessOwner(page.getOwnerId())) {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT, "Slug is already used by another page");
+                }
+                page.setTitle(request.title().trim());
+                page.setLayoutData(request.layoutData());
+                page.setOwnerId(user.getId());
+                return ResponseEntity.ok(pageRepository.save(page));
+            }
+
+            Page page = new Page();
+            page.setTitle(request.title().trim());
+            page.setSlug(slug);
+            page.setLayoutData(request.layoutData());
+            page.setOwnerId(user.getId());
+            Page saved = pageRepository.save(page);
+            return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+        } catch (DataIntegrityViolationException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "Could not save page — slug may already exist", ex);
+        }
     }
 
     @GetMapping("/{slug}")
     public ResponseEntity<Page> getBySlug(@PathVariable String slug) {
-        return pageRepository.findBySlug(slug)
+        return pageRepository.findBySlug(normalizeSlug(slug))
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
@@ -71,6 +102,11 @@ public class PageController {
 
         pageRepository.delete(page);
         return ResponseEntity.noContent().build();
+    }
+
+    private static String normalizeSlug(String slug) {
+        String cleaned = slug.trim().replaceAll("^/+|/+$", "");
+        return cleaned.isBlank() ? "page" : cleaned;
     }
 
     public record CreatePageRequest(String title, String slug, Map<String, Object> layoutData) {

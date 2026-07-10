@@ -90,7 +90,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { addAssetFromDataUrl, useMediaLibrary, type LibraryAsset } from "@/store/media-store";
-import { projectsStore, useProjects, type Project } from "@/store/projects-store";
+import { projectsStore, useProjects, useProjectsStore, type Project } from "@/store/projects-store";
 import { builderStore } from "@/store/builder-store";
 import { createPage } from "@/services/page.service";
 import { slugForBackend } from "@/utils/string";
@@ -683,6 +683,15 @@ export function Builder() {
   const saveMutation = useMutation({ mutationFn: createPage });
   const search = useSearch({ from: "/" });
   const projectCtx = useProjectContext(search.project);
+  const projectsLoaded = useProjectsStore((s) => s.loaded);
+
+  useEffect(() => {
+    if (!search.project) return;
+    if (projectsLoaded) return;
+    void projectsStore.load().catch(() => {
+      /* builder can still work standalone */
+    });
+  }, [search.project, projectsLoaded]);
 
   const [elements, setElements] = useState<BuilderElement[]>([]);
   const [past, setPast] = useState<BuilderElement[][]>([]);
@@ -703,7 +712,7 @@ export function Builder() {
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
   const [mobilePropsOpen, setMobilePropsOpen] = useState(false);
 
-  // Page manager state â€” one canvas tree per Page, isolated by activePageId.
+  // Page manager state — one canvas tree per Page, isolated by activePageId.
   type Page = { id: string; title: string; slug: string; canvasNodes: BuilderElement[] };
   const [pages, setPages] = useState<Page[]>(() => {
     if (projectCtx?.project) {
@@ -731,6 +740,29 @@ export function Builder() {
   const [pagesOpen, setPagesOpen] = useState(false);
   const [addPageOpen, setAddPageOpen] = useState(false);
   const [editPage, setEditPage] = useState<Page | null>(null);
+  const [projectHydrated, setProjectHydrated] = useState(!search.project);
+
+  // When API project arrives after load, hydrate local page state once.
+  useEffect(() => {
+    if (!search.project || !projectCtx?.project || projectHydrated) return;
+    const mapped = projectCtx.project.pages.map(
+      (p: { id: string; title: string; slug: string; canvasNodes?: unknown[] }) => ({
+        id: p.id,
+        title: p.title,
+        slug: p.slug,
+        canvasNodes: normalizeTree(p.canvasNodes as BuilderElement[] | undefined),
+      }),
+    );
+    setPages(mapped);
+    const found = mapped.find((p) => p.id === search.page);
+    const nextId = found?.id ?? mapped[0]?.id;
+    if (nextId) {
+      setActivePageId(nextId);
+      const target = mapped.find((p) => p.id === nextId);
+      setElements(normalizeTree(target?.canvasNodes ?? []));
+    }
+    setProjectHydrated(true);
+  }, [search.project, search.page, projectCtx?.project, projectHydrated]);
 
   // Load standalone layout from IndexedDB (non-project mode).
   useEffect(() => {
@@ -742,11 +774,10 @@ export function Builder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectCtx?.project]);
 
-  // When in project mode, mirror local pages back to the shared projects store
-  // so page manager edits (add / rename / delete / canvas changes) persist per project.
+  // When in project mode, mirror local pages into the in-memory projects cache.
   useEffect(() => {
     if (!projectCtx?.project) return;
-    projectsStore.setPages(
+    projectsStore.patchLocalPages(
       projectCtx.project.id,
       pages.map((p) => ({
         id: p.id,
@@ -1050,22 +1081,29 @@ export function Builder() {
         const nextPages = pages.map((p) =>
           p.id === activePageId ? { ...p, canvasNodes: elements } : p,
         );
-        projectsStore.setPages(
-          projectCtx.project.id,
-          nextPages.map((p) => ({
-            id: p.id,
-            title: p.title,
-            slug: p.slug,
-            canvasNodes: p.canvasNodes,
-          })),
-        );
-        toast.success("Project saved", {
-          description: `${projectCtx.project.name} Â· ${activePage?.title ?? ""}`,
-        });
-      } else {
-        builderStore.setStandaloneLayout(elements);
-        toast.success("Layout saved", { description: "Tree stored in IndexedDB." });
+        void projectsStore
+          .setPages(
+            projectCtx.project.id,
+            nextPages.map((p) => ({
+              id: p.id,
+              title: p.title,
+              slug: p.slug,
+              canvasNodes: p.canvasNodes,
+            })),
+          )
+          .then(() => {
+            toast.success("Project saved", {
+              description: `${projectCtx.project.name} · ${activePage?.title ?? ""}`,
+            });
+          })
+          .catch((error: Error) => {
+            toast.error("Could not save project", { description: error.message });
+          });
+        return;
       }
+
+      builderStore.setStandaloneLayout(elements);
+      toast.success("Layout saved", { description: "Tree stored in IndexedDB." });
 
       void saveMutation
         .mutateAsync({

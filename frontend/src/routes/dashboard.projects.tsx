@@ -1,5 +1,5 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,7 +11,13 @@ import {
   DialogFooter,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { projectsStore, useProjects } from "@/store/projects-store";
+import { PageLoading } from "@/components/layout/PageLoading";
+import {
+  projectsStore,
+  useProjects,
+  useProjectsLoading,
+  useProjectsStore,
+} from "@/store/projects-store";
 import { useAuth } from "@/store/auth-store";
 import { builderSearchForProject } from "@/lib/project-navigation";
 import { Plus, Globe, FileText, ArrowRight, Calendar, Settings2 } from "lucide-react";
@@ -21,7 +27,6 @@ export const Route = createFileRoute("/dashboard/projects")({
   component: ProjectsSection,
 });
 
-/** Parent layout: list at /dashboard/projects, detail child via <Outlet />. */
 function ProjectsSection() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const onList =
@@ -35,11 +40,23 @@ function MyProjects() {
   const navigate = useNavigate();
   const user = useAuth();
   const all = useProjects();
-  const mine = user ? all.filter((p) => p.ownerEmail === user.email) : [];
+  const loading = useProjectsLoading();
+  const loaded = useProjectsStore((s) => s.loaded);
+  const mine = user
+    ? all.filter((p) => p.ownerEmail.toLowerCase() === user.email.toLowerCase())
+    : [];
 
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("");
+
+  useEffect(() => {
+    if (!user) return;
+    void projectsStore.load().catch((error: Error) => {
+      toast.error(error.message || "Failed to load projects");
+    });
+  }, [user?.id]);
 
   const openInBuilder = (project: (typeof mine)[number]) => {
     void navigate({ to: "/", search: builderSearchForProject(project) });
@@ -49,18 +66,29 @@ function MyProjects() {
     void navigate({ to: "/dashboard/projects/$projectId", params: { projectId } });
   };
 
-  const create = () => {
+  const create = async () => {
     if (!user || !name.trim() || !domain.trim()) {
       toast.error("Please provide a name and domain");
       return;
     }
-    const project = projectsStore.create(name.trim(), domain.trim(), user.email, user.name);
-    toast.success(`Project "${name}" created`);
-    setName("");
-    setDomain("");
-    setOpen(false);
-    openInBuilder(project);
+    setBusy(true);
+    try {
+      const project = await projectsStore.create(name.trim(), domain.trim());
+      toast.success(`Project "${name}" created`);
+      setName("");
+      setDomain("");
+      setOpen(false);
+      openInBuilder(project);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not create project");
+    } finally {
+      setBusy(false);
+    }
   };
+
+  if (!loaded && loading) {
+    return <PageLoading label="Loading projects…" />;
+  }
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -105,7 +133,9 @@ function MyProjects() {
               <Button variant="outline" onClick={() => setOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={create}>Create Project</Button>
+              <Button onClick={() => void create()} disabled={busy}>
+                {busy ? "Creating…" : "Create Project"}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

@@ -19,6 +19,7 @@ export type { AssetKind, LibraryAsset } from "@/store/media-store";
 export {
   projectsStore,
   useProjects,
+  useProjectsLoading,
   useProjectsStore,
 } from "@/store/projects-store";
 export type { Page, Project } from "@/store/projects-store";
