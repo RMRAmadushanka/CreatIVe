@@ -1,68 +1,14 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 
-import { idbStorage } from "@/store/idb";
+import { removeMediaObject, uploadMediaFile } from "@/lib/supabase-storage";
+import {
+  createMediaAsset,
+  deleteMediaAsset,
+  listMediaAssets,
+} from "@/services/media.service";
+import type { AssetKind, LibraryAsset } from "@/types/media.types";
 
-export type AssetKind = "logo" | "icon" | "image";
-
-export type LibraryAsset = {
-  id: string;
-  name: string;
-  url: string;
-  kind: AssetKind;
-  format: string;
-  width: number;
-  height: number;
-  size: number;
-  createdAt: number;
-};
-
-const SEED: LibraryAsset[] = [
-  {
-    id: "s1",
-    name: "brand-mark.svg",
-    url: "https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=400",
-    kind: "logo",
-    format: "SVG",
-    width: 512,
-    height: 512,
-    size: 0,
-    createdAt: 0,
-  },
-  {
-    id: "s2",
-    name: "hero-mountain.jpg",
-    url: "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800",
-    kind: "image",
-    format: "JPG",
-    width: 1920,
-    height: 1280,
-    size: 0,
-    createdAt: 0,
-  },
-  {
-    id: "s3",
-    name: "icon-star.png",
-    url: "https://images.unsplash.com/photo-1454789476662-53eb23ba5907?w=200",
-    kind: "icon",
-    format: "PNG",
-    width: 128,
-    height: 128,
-    size: 0,
-    createdAt: 0,
-  },
-  {
-    id: "s4",
-    name: "workspace.jpg",
-    url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?w=800",
-    kind: "image",
-    format: "JPG",
-    width: 1600,
-    height: 900,
-    size: 0,
-    createdAt: 0,
-  },
-];
+export type { AssetKind, LibraryAsset };
 
 export function classifyKind(width: number, height: number, format: string, name = ""): AssetKind {
   const fmt = format.toLowerCase();
@@ -83,6 +29,98 @@ export function readImageMeta(url: string): Promise<{ width: number; height: num
   });
 }
 
+type MediaState = {
+  assets: LibraryAsset[];
+  loaded: boolean;
+  loading: boolean;
+  error: string | null;
+  load: () => Promise<void>;
+  reset: () => void;
+  addFromFile: (file: File) => Promise<LibraryAsset>;
+  deleteAsset: (id: string) => Promise<void>;
+};
+
+export const useMediaStore = create<MediaState>((set, get) => ({
+  assets: [],
+  loaded: false,
+  loading: false,
+  error: null,
+
+  load: async () => {
+    set({ loading: true, error: null });
+    try {
+      const assets = await listMediaAssets();
+      set({ assets, loaded: true, loading: false });
+    } catch (error) {
+      set({
+        loading: false,
+        error: error instanceof Error ? error.message : "Failed to load media",
+      });
+      throw error;
+    }
+  },
+
+  reset: () => set({ assets: [], loaded: false, loading: false, error: null }),
+
+  addFromFile: async (file) => {
+    const uploaded = await uploadMediaFile(file);
+    try {
+      const meta = await readImageMeta(uploaded.publicUrl);
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      const asset = await createMediaAsset({
+        name: file.name,
+        url: uploaded.publicUrl,
+        storagePath: uploaded.path,
+        kind: classifyKind(meta.width, meta.height, ext, file.name),
+        format: ext.toUpperCase() || "IMG",
+        width: meta.width,
+        height: meta.height,
+        size: file.size,
+      });
+      set((s) => ({ assets: [asset, ...s.assets.filter((a) => a.id !== asset.id)] }));
+      return asset;
+    } catch (error) {
+      await removeMediaObject(uploaded.path);
+      throw error;
+    }
+  },
+
+  deleteAsset: async (id) => {
+    const removed = await deleteMediaAsset(id);
+    set((s) => ({ assets: s.assets.filter((a) => a.id !== id) }));
+    if (removed.storagePath) {
+      await removeMediaObject(removed.storagePath);
+    }
+  },
+}));
+
+export function getAssets(): LibraryAsset[] {
+  return useMediaStore.getState().assets;
+}
+
+export async function addAssetFromFile(file: File): Promise<LibraryAsset> {
+  return useMediaStore.getState().addFromFile(file);
+}
+
+/** @deprecated Prefer addAssetFromFile — data URLs are no longer stored. */
+export async function addAssetFromDataUrl(_input: {
+  name: string;
+  url: string;
+  size?: number;
+  format?: string;
+}): Promise<LibraryAsset> {
+  throw new Error("Data URL uploads are no longer supported. Upload a File via addAssetFromFile.");
+}
+
+export async function deleteAsset(id: string): Promise<void> {
+  return useMediaStore.getState().deleteAsset(id);
+}
+
+export function useMediaLibrary(): LibraryAsset[] {
+  return useMediaStore((s) => s.assets);
+}
+
+/** Kept for re-exports; no longer used for uploads. */
 export function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -90,84 +128,4 @@ export function fileToDataUrl(file: File): Promise<string> {
     r.onerror = () => reject(new Error("read failed"));
     r.readAsDataURL(file);
   });
-}
-
-type MediaState = {
-  assets: LibraryAsset[];
-  addFromDataUrl: (input: {
-    name: string;
-    url: string;
-    size?: number;
-    format?: string;
-  }) => Promise<LibraryAsset>;
-  addFromFile: (file: File) => Promise<LibraryAsset>;
-  deleteAsset: (id: string) => void;
-};
-
-export const useMediaStore = create<MediaState>()(
-  persist(
-    (set, get) => ({
-      assets: SEED,
-
-      addFromDataUrl: async (input) => {
-        const ext = (input.format || input.name.split(".").pop() || "").toLowerCase();
-        const meta = await readImageMeta(input.url);
-        const asset: LibraryAsset = {
-          id:
-            typeof crypto !== "undefined" && "randomUUID" in crypto
-              ? crypto.randomUUID()
-              : `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          name: input.name,
-          url: input.url,
-          format: ext.toUpperCase() || "IMG",
-          width: meta.width,
-          height: meta.height,
-          size: input.size || 0,
-          kind: classifyKind(meta.width, meta.height, ext, input.name),
-          createdAt: Date.now(),
-        };
-        set({ assets: [asset, ...get().assets] });
-        return asset;
-      },
-
-      addFromFile: async (file) => {
-        const url = await fileToDataUrl(file);
-        const ext = (file.name.split(".").pop() || "").toLowerCase();
-        return get().addFromDataUrl({ name: file.name, url, size: file.size, format: ext });
-      },
-
-      deleteAsset: (id) => set({ assets: get().assets.filter((a) => a.id !== id) }),
-    }),
-    {
-      name: "creative:media-library:v1",
-      storage: idbStorage,
-      skipHydration: true,
-      partialize: (state) => ({ assets: state.assets }),
-    },
-  ),
-);
-
-export function getAssets(): LibraryAsset[] {
-  return useMediaStore.getState().assets;
-}
-
-export async function addAssetFromDataUrl(input: {
-  name: string;
-  url: string;
-  size?: number;
-  format?: string;
-}): Promise<LibraryAsset> {
-  return useMediaStore.getState().addFromDataUrl(input);
-}
-
-export async function addAssetFromFile(file: File): Promise<LibraryAsset> {
-  return useMediaStore.getState().addFromFile(file);
-}
-
-export function deleteAsset(id: string) {
-  useMediaStore.getState().deleteAsset(id);
-}
-
-export function useMediaLibrary(): LibraryAsset[] {
-  return useMediaStore((s) => s.assets);
 }

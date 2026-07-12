@@ -17,11 +17,16 @@ import {
 } from "@/components/ui/select";
 import { listPlatformUsers, setUserRole } from "@/services/user.service";
 import { authStore, useAuth } from "@/store/auth-store";
+import type { ApiUser } from "@/types/user.types";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/dashboard/admin/users")({
   component: AdminUsers,
 });
+
+function normalizeRole(role: string): "admin" | "user" {
+  return role.toLowerCase() === "admin" ? "admin" : "user";
+}
 
 function AdminUsers() {
   const currentUser = useAuth();
@@ -34,16 +39,35 @@ function AdminUsers() {
 
   const roleMutation = useMutation({
     mutationFn: ({ id, role }: { id: string; role: "admin" | "user" }) => setUserRole(id, role),
+    onMutate: async ({ id, role }) => {
+      await queryClient.cancelQueries({ queryKey: ["admin", "users"] });
+      const previous = queryClient.getQueryData<ApiUser[]>(["admin", "users"]);
+      queryClient.setQueryData<ApiUser[]>(["admin", "users"], (old) =>
+        (old ?? []).map((u) => (u.id === id ? { ...u, role } : u)),
+      );
+      return { previous };
+    },
+    onError: (err: Error, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["admin", "users"], context.previous);
+      }
+      toast.error(err.message);
+    },
     onSuccess: async (updated) => {
-      await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      const role = normalizeRole(updated.role);
+      queryClient.setQueryData<ApiUser[]>(["admin", "users"], (old) =>
+        (old ?? []).map((u) => (u.id === updated.id ? { ...u, ...updated, role } : u)),
+      );
       if (currentUser?.id === updated.id) {
         await authStore.refreshFromBackend();
       }
       toast.success(
-        `${updated.name} is now ${updated.role === "admin" ? "an Admin" : "a Normal User"}`,
+        `${updated.name} is now ${role === "admin" ? "an Admin" : "a Normal User"}`,
       );
     },
-    onError: (err: Error) => toast.error(err.message),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
   });
 
   return (
@@ -71,36 +95,40 @@ function AdminUsers() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {users.map((u) => (
-                <TableRow key={u.id}>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold uppercase text-primary">
-                        {u.name.slice(0, 1)}
+              {users.map((u) => {
+                const role = normalizeRole(u.role);
+                return (
+                  <TableRow key={u.id}>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold uppercase text-primary">
+                          {u.name.slice(0, 1)}
+                        </div>
+                        <span className="font-medium">{u.name}</span>
                       </div>
-                      <span className="font-medium">{u.name}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{u.email}</TableCell>
-                  <TableCell>
-                    <Select
-                      value={u.role}
-                      disabled={roleMutation.isPending}
-                      onValueChange={(v) =>
-                        roleMutation.mutate({ id: u.id, role: v as "admin" | "user" })
-                      }
-                    >
-                      <SelectTrigger className="h-8 w-40">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="admin">Admin</SelectItem>
-                        <SelectItem value="user">Normal User</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </TableCell>
-                </TableRow>
-              ))}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{u.email}</TableCell>
+                    <TableCell>
+                      <Select
+                        key={`${u.id}-${role}`}
+                        value={role}
+                        disabled={roleMutation.isPending}
+                        onValueChange={(v) =>
+                          roleMutation.mutate({ id: u.id, role: v as "admin" | "user" })
+                        }
+                      >
+                        <SelectTrigger className="h-8 w-40">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="admin">Admin</SelectItem>
+                          <SelectItem value="user">Normal User</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}

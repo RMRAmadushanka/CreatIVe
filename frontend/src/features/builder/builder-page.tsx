@@ -1,4 +1,4 @@
-﻿import {
+import {
   Fragment,
   useCallback,
   useEffect,
@@ -43,10 +43,8 @@ import {
   Sparkles,
   Upload,
   FolderOpen,
-  ImagePlus,
   Loader2,
   Maximize2,
-  Check,
   Heading1,
   AlignLeft,
   Shapes,
@@ -66,7 +64,6 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { DynamicIcon, type IconName } from "@/lib/dynamic-icon";
-import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -89,7 +86,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { addAssetFromDataUrl, useMediaLibrary, type LibraryAsset } from "@/store/media-store";
+import { addAssetFromFile, useMediaLibrary, type LibraryAsset } from "@/store/media-store";
 import { projectsStore, useProjects, useProjectsStore, type Project } from "@/store/projects-store";
 import { builderStore } from "@/store/builder-store";
 import { createPage } from "@/services/page.service";
@@ -182,33 +179,6 @@ type BuilderElement = {
   props: Record<string, PropValue>;
   children: BuilderElement[];
 };
-
-type MediaCategory = "logos" | "icons" | "images";
-type MediaAsset = {
-  id: string;
-  name: string;
-  size: number;
-  url: string;
-  category: MediaCategory;
-  mime: string;
-};
-const MEDIA_ACCEPT = "image/png,image/jpeg,image/svg+xml,image/webp";
-const MEDIA_FILTERS: { id: "all" | MediaCategory; label: string }[] = [
-  { id: "all", label: "All Assets" },
-  { id: "logos", label: "Logos" },
-  { id: "icons", label: "Icons" },
-  { id: "images", label: "Images" },
-];
-function categorizeAsset(file: { name: string; type: string }): MediaCategory {
-  if (file.type === "image/svg+xml") return "icons";
-  if (/logo|brand|mark/i.test(file.name)) return "logos";
-  return "images";
-}
-function formatBytes(n: number) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
 
 // Layout keys stored per breakpoint (desktop / mobile). Tablet inherits desktop.
 const RESPONSIVE_KEYS = new Set([
@@ -703,10 +673,6 @@ export function Builder() {
   const [pendingRowParent, setPendingRowParent] = useState<{ parentId: string | null } | null>(
     null,
   );
-  const [assets, setAssets] = useState<MediaAsset[]>([]);
-  const [mediaOpen, setMediaOpen] = useState(false);
-  const [mediaFilter, setMediaFilter] = useState<"all" | MediaCategory>("all");
-  const [uploading, setUploading] = useState<{ name: string; progress: number } | null>(null);
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const isMobile = useIsMobile();
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
@@ -985,67 +951,6 @@ export function Builder() {
     if (!selected) return;
     commit(removeNode(elements, selected.id));
     setSelectedId(null);
-  };
-
-  const uploadAssets = async (files: FileList | File[]) => {
-    const list = Array.from(files);
-    for (const file of list) {
-      if (!MEDIA_ACCEPT.split(",").includes(file.type)) {
-        toast.error(`${file.name}: only PNG, JPG, SVG, WebP allowed`);
-        continue;
-      }
-      if (file.size > MAX_IMAGE_BYTES) {
-        toast.error(`${file.name}: must be 5 MB or smaller`);
-        continue;
-      }
-      setUploading({ name: file.name, progress: 10 });
-      for (const p of [30, 55, 80]) {
-        await new Promise((r) => setTimeout(r, 90));
-        setUploading({ name: file.name, progress: p });
-      }
-      const url = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result || ""));
-        r.onerror = () => reject(new Error("read failed"));
-        r.readAsDataURL(file);
-      }).catch(() => "");
-      if (!url) {
-        toast.error(`${file.name}: could not read`);
-        continue;
-      }
-      setUploading({ name: file.name, progress: 100 });
-      const asset: MediaAsset = {
-        id: (crypto as Crypto).randomUUID(),
-        name: file.name,
-        size: file.size,
-        url,
-        category: categorizeAsset(file),
-        mime: file.type,
-      };
-      setAssets((a) => [asset, ...a]);
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    setUploading(null);
-  };
-
-  const deleteAsset = (id: string) => {
-    setAssets((a) => a.filter((x) => x.id !== id));
-  };
-
-  const applyAsset = (asset: MediaAsset) => {
-    if (!selected) {
-      toast.info("Select an Image Block or Navigation Header first");
-      return;
-    }
-    if (selected.type === "image") {
-      commitProp("src", (selected.props.src ?? "") as PropValue, asset.url);
-      toast.success(`Applied ${asset.name} to image`);
-    } else if (selected.type === "navbar") {
-      commitProp("brandImage", (selected.props.brandImage ?? "") as PropValue, asset.url);
-      toast.success(`Applied ${asset.name} as brand logo`);
-    } else {
-      toast.info("Select an Image Block or Navigation Header to apply an asset");
-    }
   };
 
   // Resize a grid's column children (1..3), preserving existing column contents.
@@ -3546,50 +3451,36 @@ function PropertyEditor({
   );
 }
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-
 function UploadButton({
   onFile,
   label = "Upload",
 }: {
-  onFile: (dataUrl: string) => void;
+  onFile: (url: string) => void;
   label?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
   return (
     <>
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept="image/png,image/jpeg,image/svg+xml,image/webp"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
           e.target.value = "";
           if (!file) return;
-          if (!file.type.startsWith("image/")) {
-            toast.error("Please choose an image file");
-            return;
-          }
-          if (file.size > MAX_IMAGE_BYTES) {
-            toast.error("Image must be 5 MB or smaller");
-            return;
-          }
-          const reader = new FileReader();
-          reader.onload = () => {
-            const url = String(reader.result || "");
-            if (!url) return;
-            onFile(url);
-            // Also persist to the shared Media Library for reuse.
-            addAssetFromDataUrl({
-              name: file.name,
-              url,
-              size: file.size,
-              format: (file.name.split(".").pop() || "").toLowerCase(),
-            }).catch(() => {});
-          };
-          reader.onerror = () => toast.error("Could not read file");
-          reader.readAsDataURL(file);
+          setUploading(true);
+          void addAssetFromFile(file)
+            .then((asset) => {
+              onFile(asset.url);
+              toast.success(`Uploaded ${asset.name}`);
+            })
+            .catch((error) => {
+              toast.error(error instanceof Error ? error.message : "Upload failed");
+            })
+            .finally(() => setUploading(false));
         }}
       />
       <Button
@@ -3597,9 +3488,14 @@ function UploadButton({
         variant="outline"
         size="sm"
         className="h-9 shrink-0 gap-1.5"
+        disabled={uploading}
         onClick={() => inputRef.current?.click()}
       >
-        <Upload className="h-3.5 w-3.5" />
+        {uploading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Upload className="h-3.5 w-3.5" />
+        )}
         {label}
       </Button>
     </>
@@ -3638,8 +3534,8 @@ function MediaPickerButton({
               Media Library
             </DialogTitle>
             <DialogDescription>
-              Pick a previously uploaded asset. New uploads from anywhere in the builder also appear
-              here automatically.
+              Pick an asset from your library. Uploads go to Supabase Storage and stay available
+              after you sign out and back in.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-wrap gap-1 pb-2">
@@ -5440,254 +5336,6 @@ function ImageSlidesEditor({
         ))}
       </div>
     </div>
-  );
-}
-
-type MediaPanelProps = {
-  assets: MediaAsset[];
-  filter: "all" | MediaCategory;
-  setFilter: (f: "all" | MediaCategory) => void;
-  onUpload: (files: FileList | File[]) => void;
-  onDelete: (id: string) => void;
-  onSelect: (asset: MediaAsset) => void;
-  uploading: { name: string; progress: number } | null;
-  canApply?: boolean;
-  compact?: boolean;
-  onOpenModal?: () => void;
-};
-
-function MediaLibraryPanel({
-  assets,
-  filter,
-  setFilter,
-  onUpload,
-  onDelete,
-  onSelect,
-  uploading,
-  canApply,
-  compact,
-  onOpenModal,
-}: MediaPanelProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dragOver, setDragOver] = useState(false);
-  const filtered = filter === "all" ? assets : assets.filter((a) => a.category === filter);
-
-  const openPicker = () => inputRef.current?.click();
-
-  return (
-    <div className="flex flex-col gap-3">
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        accept={MEDIA_ACCEPT}
-        className="hidden"
-        onChange={(e) => {
-          const files = e.target.files;
-          e.target.value = "";
-          if (files && files.length) onUpload(files);
-        }}
-      />
-
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          if (e.dataTransfer.files?.length) onUpload(e.dataTransfer.files);
-        }}
-        onClick={openPicker}
-        className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed p-4 text-center transition-colors ${
-          dragOver
-            ? "border-indigo-500 bg-indigo-500/10"
-            : "border-border bg-muted/20 hover:border-indigo-500/50 hover:bg-muted/40"
-        }`}
-      >
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/15 text-indigo-400">
-          <Upload className="h-4 w-4" />
-        </div>
-        <div className="text-xs font-medium">
-          {compact ? "Drop or click to upload" : "Drag & drop images here"}
-        </div>
-        <div className="text-[10px] text-muted-foreground">
-          PNG Â· JPG Â· SVG Â· WebP Â· up to 5 MB
-        </div>
-      </div>
-
-      {uploading && (
-        <div className="space-y-1 rounded-md border border-border bg-card/60 p-2">
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin text-indigo-400" />
-            <span className="truncate">{uploading.name}</span>
-            <span className="ml-auto tabular-nums">{uploading.progress}%</span>
-          </div>
-          <Progress value={uploading.progress} className="h-1" />
-        </div>
-      )}
-
-      <div className="flex flex-wrap gap-1">
-        {MEDIA_FILTERS.map((f) => {
-          const active = filter === f.id;
-          return (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setFilter(f.id)}
-              className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                active
-                  ? "bg-indigo-500 text-white"
-                  : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
-              }`}
-            >
-              {f.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {canApply === false && assets.length > 0 && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-300">
-          Select an Image Block or Nav Header on the canvas to apply an asset.
-        </div>
-      )}
-
-      {assets.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-muted/10 px-4 py-8 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-            <ImagePlus className="h-5 w-5 text-muted-foreground" />
-          </div>
-          <div>
-            <div className="text-sm font-semibold">No assets yet</div>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Upload logos, icons or images to reuse across your page.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            onClick={openPicker}
-            className="bg-indigo-500 text-white hover:bg-indigo-600"
-          >
-            <Upload className="mr-2 h-3.5 w-3.5" />
-            Upload your first image
-          </Button>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-[11px] text-muted-foreground">
-          No assets in this category.
-        </div>
-      ) : (
-        <div
-          className={`grid gap-2 ${
-            compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5"
-          }`}
-        >
-          {filtered.map((a) => (
-            <MediaCard
-              key={a.id}
-              asset={a}
-              onDelete={() => onDelete(a.id)}
-              onSelect={() => onSelect(a)}
-            />
-          ))}
-        </div>
-      )}
-
-      {compact && onOpenModal && assets.length > 0 && (
-        <button
-          type="button"
-          onClick={onOpenModal}
-          className="mt-1 rounded-md border border-border py-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          Open full library
-        </button>
-      )}
-    </div>
-  );
-}
-
-function MediaCard({
-  asset,
-  onDelete,
-  onSelect,
-}: {
-  asset: MediaAsset;
-  onDelete: () => void;
-  onSelect: () => void;
-}) {
-  return (
-    <div className="group relative overflow-hidden rounded-md border border-border bg-card">
-      <div className="flex aspect-square items-center justify-center bg-[repeating-conic-gradient(#1f2937_0_25%,#111827_0_50%)] bg-[length:12px_12px]">
-        <img
-          src={asset.url}
-          alt={asset.name}
-          className="max-h-full max-w-full object-contain"
-          loading="lazy"
-        />
-      </div>
-      <div className="border-t border-border px-2 py-1.5">
-        <div className="truncate text-[11px] font-medium leading-tight">{asset.name}</div>
-        <div className="text-[10px] text-muted-foreground">{formatBytes(asset.size)}</div>
-      </div>
-      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-background/80 opacity-0 backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-        <Button
-          type="button"
-          size="sm"
-          className="h-7 gap-1 bg-indigo-500 text-white hover:bg-indigo-600"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect();
-          }}
-        >
-          <Check className="h-3 w-3" />
-          Select
-        </Button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
-          title="Delete asset"
-        >
-          <Trash2 className="h-3 w-3" />
-          Delete
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function MediaLibraryDialog({
-  open,
-  onOpenChange,
-  ...props
-}: {
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-} & MediaPanelProps) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <FolderOpen className="h-4 w-4 text-indigo-400" />
-            Media Library
-          </DialogTitle>
-          <DialogDescription>
-            Upload and manage assets. Select an Image Block or Nav Header on the canvas to apply an
-            asset with one click.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="max-h-[70vh] overflow-y-auto pr-1">
-          <MediaLibraryPanel {...props} />
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }
 

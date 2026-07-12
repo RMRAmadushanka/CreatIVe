@@ -13,7 +13,9 @@ async function parseOrThrow<T>(res: Response): Promise<T> {
 }
 
 export async function listPlatformUsers(): Promise<ApiUser[]> {
-  const res = await authorizedFetch(`${API_BASE_URL}${API_ENDPOINTS.adminUsers}`);
+  const res = await authorizedFetch(`${API_BASE_URL}${API_ENDPOINTS.adminUsers}`, {
+    requireAuth: true,
+  });
   return parseOrThrow<ApiUser[]>(res);
 }
 
@@ -22,6 +24,7 @@ export async function setUserRole(id: string, role: "admin" | "user"): Promise<A
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ role }),
+    requireAuth: true,
   });
   return parseOrThrow<ApiUser>(res);
 }

@@ -9,6 +9,8 @@ export const API_ENDPOINTS = {
   projectPages: (id: string) => `/api/projects/${encodeURIComponent(id)}/pages`,
   projectPageById: (projectId: string, pageId: string) =>
     `/api/projects/${encodeURIComponent(projectId)}/pages/${encodeURIComponent(pageId)}`,
+  media: "/api/media",
+  mediaById: (id: string) => `/api/media/${encodeURIComponent(id)}`,
   authMe: "/api/auth/me",
   authSync: "/api/auth/sync",
   adminUsers: "/api/admin/users",

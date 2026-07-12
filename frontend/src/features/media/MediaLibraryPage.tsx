@@ -6,6 +6,7 @@ import {
   Link as LinkIcon,
   ImageIcon,
   Images as ImagesIcon,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,7 @@ import {
   addAssetFromFile,
   deleteAsset as deleteFromStore,
   useMediaLibrary,
+  useMediaStore,
   type AssetKind,
   type LibraryAsset,
 } from "@/store/media-store";
@@ -30,8 +32,11 @@ const FILTERS: { id: "all" | AssetKind; label: string }[] = [
 
 export function MediaLibraryPage() {
   const assets = useMediaLibrary();
+  const loading = useMediaStore((s) => s.loading);
+  const loaded = useMediaStore((s) => s.loaded);
   const [filter, setFilter] = useState<"all" | AssetKind>("all");
   const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filtered = useMemo(() => {
@@ -53,28 +58,32 @@ export function MediaLibraryPage() {
 
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    const accepted = ["image/png", "image/jpeg", "image/svg+xml", "image/webp"];
+    setBusy(true);
     let count = 0;
-    for (const file of Array.from(files)) {
-      if (!accepted.includes(file.type)) {
-        toast.error(`${file.name}: unsupported format`);
-        continue;
+    try {
+      for (const file of Array.from(files)) {
+        try {
+          await addAssetFromFile(file);
+          count++;
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : `${file.name}: upload failed`);
+        }
       }
-      if (file.size > 5 * 1024 * 1024) {
-        toast.error(`${file.name}: exceeds 5MB`);
-        continue;
+      if (count) {
+        toast.success(`Uploaded ${count} asset${count > 1 ? "s" : ""}`);
       }
-      await addAssetFromFile(file);
-      count++;
-    }
-    if (count) {
-      toast.success(`Uploaded ${count} asset${count > 1 ? "s" : ""}`);
+    } finally {
+      setBusy(false);
     }
   }
 
-  function deleteAsset(id: string) {
-    deleteFromStore(id);
-    toast.success("Asset deleted");
+  async function deleteAsset(id: string) {
+    try {
+      await deleteFromStore(id);
+      toast.success("Asset deleted");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete asset");
+    }
   }
 
   async function copyUrl(url: string) {
@@ -124,8 +133,12 @@ export function MediaLibraryPage() {
                 className="pl-9"
               />
             </div>
-            <Button onClick={() => fileInputRef.current?.click()} className="gap-2">
-              <Upload className="h-4 w-4" />
+            <Button
+              onClick={() => fileInputRef.current?.click()}
+              className="gap-2"
+              disabled={busy}
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
               Upload New Asset
             </Button>
           </div>
@@ -164,7 +177,12 @@ export function MediaLibraryPage() {
       </header>
 
       <main className="mx-auto max-w-7xl px-6 py-8">
-        {filtered.length === 0 ? (
+        {loading && !loaded ? (
+          <div className="flex items-center justify-center gap-2 py-20 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading media…
+          </div>
+        ) : filtered.length === 0 ? (
           <EmptyState onUpload={() => fileInputRef.current?.click()} hasQuery={!!query} />
         ) : (
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
