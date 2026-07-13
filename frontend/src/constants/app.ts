@@ -1,1 +1,1 @@
-export const APP_NAME = "Page Builder";
+export const APP_NAME = "CreatIVe";
