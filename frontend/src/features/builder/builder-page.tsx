@@ -2,13 +2,14 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Square,
   RectangleHorizontal,
@@ -87,6 +88,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { addAssetFromFile, useMediaLibrary, type LibraryAsset } from "@/store/media-store";
+import { getMySubscription } from "@/services/billing.service";
 import { projectsStore, useProjects, useProjectsStore, type Project } from "@/store/projects-store";
 import { builderStore } from "@/store/builder-store";
 import { createPage } from "@/services/page.service";
@@ -654,6 +656,20 @@ export function Builder() {
   const search = useSearch({ from: "/" });
   const projectCtx = useProjectContext(search.project);
   const projectsLoaded = useProjectsStore((s) => s.loaded);
+  const billingQuery = useQuery({
+    queryKey: ["billing", "me"],
+    queryFn: getMySubscription,
+    staleTime: 60_000,
+  });
+  const allowedComponentTypes = useMemo(() => {
+    const plan = billingQuery.data?.plan;
+    if (!plan || plan.allBuilderComponents) return null; // null = all allowed
+    return new Set(plan.builderComponents);
+  }, [billingQuery.data]);
+  const isComponentAllowed = useCallback(
+    (type: string) => !allowedComponentTypes || allowedComponentTypes.has(type),
+    [allowedComponentTypes],
+  );
 
   useEffect(() => {
     if (!search.project) return;
@@ -892,6 +908,12 @@ export function Builder() {
 
   const onDragEnd = useCallback(
     (event: Parameters<typeof handleDragEnd>[0]) => {
+      const activeId = String(event.active.id);
+      const paletteType = paletteTypeFromId(activeId);
+      if (paletteType && !isComponentAllowed(paletteType)) {
+        toast.error("Upgrade your plan to use this component — see Billing");
+        return;
+      }
       handleDragEnd(event, {
         elements,
         commit: (next) => commit(next as BuilderElement[]),
@@ -904,7 +926,7 @@ export function Builder() {
         moveNode: moveNode as DragEndContext["moveNode"],
       });
     },
-    [elements, commit],
+    [elements, commit, isComponentAllowed],
   );
 
 
@@ -1212,7 +1234,17 @@ export function Builder() {
             </div>
             <div className="flex-1 space-y-2 overflow-y-auto p-4">
               {PALETTE.map(({ type, label, icon, hint }) => (
-                <PaletteDraggable key={type} type={type} label={label} hint={hint} icon={icon} />
+                <PaletteDraggable
+                  key={type}
+                  type={type}
+                  label={label}
+                  hint={hint}
+                  icon={icon}
+                  locked={!isComponentAllowed(type)}
+                  onLockedClick={() =>
+                    toast.error("Upgrade your plan to use this component — see Billing")
+                  }
+                />
               ))}
             </div>
             <div className="border-t border-border p-4">
@@ -1362,11 +1394,17 @@ export function Builder() {
             </SheetDescription>
           </SheetHeader>
           <div className="flex-1 space-y-2 overflow-y-auto p-4">
-            {PALETTE.map(({ type, label, icon: Icon, hint }) => (
+            {PALETTE.map(({ type, label, icon: Icon, hint }) => {
+              const locked = !isComponentAllowed(type);
+              return (
               <button
                 key={type}
                 type="button"
                 onClick={() => {
+                  if (locked) {
+                    toast.error("Upgrade your plan to use this component — see Billing");
+                    return;
+                  }
                   if (type === "column") return;
                   if (type === "row") {
                     setPendingRowParent({ parentId: null });
@@ -1377,18 +1415,24 @@ export function Builder() {
                   }
                   setMobilePaletteOpen(false);
                 }}
-                className="group flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border bg-card p-3 text-left transition-all hover:border-indigo-500/50 hover:bg-accent"
+                className={`group flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border bg-card p-3 text-left transition-all hover:border-indigo-500/50 hover:bg-accent ${
+                  locked ? "opacity-50" : ""
+                }`}
               >
                 <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-foreground">
                   <Icon className="h-4 w-4" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium leading-tight">{label}</div>
+                  <div className="text-sm font-medium leading-tight">
+                    {label}
+                    {locked ? " · Pro" : ""}
+                  </div>
                   <div className="truncate text-xs text-muted-foreground">{hint}</div>
                 </div>
                 <Plus className="h-4 w-4 text-muted-foreground" />
               </button>
-            ))}
+              );
+            })}
           </div>
           <div className="border-t border-border p-4">
             <Button

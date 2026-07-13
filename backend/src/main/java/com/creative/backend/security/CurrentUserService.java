@@ -1,10 +1,12 @@
 package com.creative.backend.security;
 
+import com.creative.backend.billing.SubscriptionService;
 import com.creative.backend.domain.User;
 import com.creative.backend.domain.UserRepository;
 import com.creative.backend.domain.UserRole;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -16,12 +18,15 @@ import org.springframework.web.server.ResponseStatusException;
 public class CurrentUserService {
 
     private final UserRepository userRepository;
+    private final SubscriptionService subscriptionService;
     private final String bootstrapAdminEmail;
 
     public CurrentUserService(
             UserRepository userRepository,
+            @Lazy SubscriptionService subscriptionService,
             @Value("${app.bootstrap-admin-email:}") String bootstrapAdminEmail) {
         this.userRepository = userRepository;
+        this.subscriptionService = subscriptionService;
         this.bootstrapAdminEmail = bootstrapAdminEmail == null ? "" : bootstrapAdminEmail.trim().toLowerCase();
     }
 
@@ -41,7 +46,9 @@ public class CurrentUserService {
         return userRepository.findById(sub).map(existing -> {
             existing.setEmail(email);
             existing.setName(readName(jwt));
-            return userRepository.save(existing);
+            User saved = userRepository.save(existing);
+            subscriptionService.ensureActiveSubscription(saved.getId());
+            return saved;
         }).orElseGet(() -> {
             UserRole role = UserRole.USER;
             if (!bootstrapAdminEmail.isBlank() && email.equalsIgnoreCase(bootstrapAdminEmail)) {
@@ -52,7 +59,9 @@ public class CurrentUserService {
             created.setEmail(email);
             created.setName(readName(jwt));
             created.setRole(role);
-            return userRepository.save(created);
+            User saved = userRepository.save(created);
+            subscriptionService.ensureActiveSubscription(saved.getId());
+            return saved;
         });
     }
 

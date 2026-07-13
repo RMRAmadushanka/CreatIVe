@@ -1,5 +1,6 @@
 package com.creative.backend.web;
 
+import com.creative.backend.billing.PlanLimitService;
 import com.creative.backend.domain.MediaAsset;
 import com.creative.backend.domain.MediaAssetRepository;
 import com.creative.backend.domain.User;
@@ -27,11 +28,15 @@ public class MediaController {
 
     private final MediaAssetRepository mediaAssetRepository;
     private final CurrentUserService currentUserService;
+    private final PlanLimitService planLimitService;
 
     public MediaController(
-            MediaAssetRepository mediaAssetRepository, CurrentUserService currentUserService) {
+            MediaAssetRepository mediaAssetRepository,
+            CurrentUserService currentUserService,
+            PlanLimitService planLimitService) {
         this.mediaAssetRepository = mediaAssetRepository;
         this.currentUserService = currentUserService;
+        this.planLimitService = planLimitService;
     }
 
     @GetMapping
@@ -47,6 +52,7 @@ public class MediaController {
     public ResponseEntity<MediaAssetDto> create(@RequestBody CreateMediaRequest request) {
         User user = currentUserService.requireUser();
         validate(request);
+        planLimitService.requireCanUploadMedia(user.getId());
 
         MediaAsset asset = new MediaAsset();
         asset.setOwnerId(user.getId());
@@ -60,6 +66,7 @@ public class MediaController {
         asset.setSizeBytes(Math.max(0, request.size()));
 
         MediaAsset saved = mediaAssetRepository.save(asset);
+        planLimitService.recordMediaUpload(user.getId());
         return ResponseEntity.status(HttpStatus.CREATED).body(MediaAssetDto.from(saved));
     }
 
@@ -74,7 +81,6 @@ public class MediaController {
         }
 
         mediaAssetRepository.delete(asset);
-        // Return DTO so the client can remove the file from Supabase Storage using storagePath.
         return ResponseEntity.ok(MediaAssetDto.from(asset));
     }
 

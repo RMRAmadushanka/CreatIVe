@@ -26,6 +26,7 @@ import {
   LogOut,
   Shield,
   Layers,
+  CreditCard,
 } from "lucide-react";
 import { authStore, useAuth, useAuthReady, type AuthUser } from "@/store/auth-store";
 import { requireAuth } from "@/lib/auth-guards";
@@ -107,12 +108,14 @@ function DashboardLayout() {
 
 const userItems = [
   { title: "My Projects", url: "/dashboard/projects", icon: FolderKanban },
+  { title: "Billing", url: "/dashboard/billing", icon: CreditCard },
   { title: "Profile", url: "/dashboard/profile", icon: UserIcon },
 ];
 
 const adminItems = [
   { title: "All Users", url: "/dashboard/admin/users", icon: UsersIcon },
   { title: "All Platform Projects", url: "/dashboard/admin/projects", icon: Globe },
+  { title: "Billing", url: "/dashboard/billing", icon: CreditCard },
   { title: "System Settings", url: "/dashboard/admin/settings", icon: Settings },
 ];
 

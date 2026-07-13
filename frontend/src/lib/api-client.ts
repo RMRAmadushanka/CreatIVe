@@ -37,6 +37,13 @@ export async function authorizedFetch(
   if (res.status === 403) {
     throw new ApiError("You do not have permission to perform this action.", 403);
   }
+  if (res.status === 402) {
+    const detail = await res.clone().text().catch(() => "");
+    throw new ApiError(
+      detail || "Plan limit reached. Upgrade your plan to continue.",
+      402,
+    );
+  }
 
   return res;
 }

@@ -1,0 +1,201 @@
+package com.creative.backend.web;
+
+import com.creative.backend.billing.PayHereService;
+import com.creative.backend.billing.PlanLimitService;
+import com.creative.backend.billing.SubscriptionService;
+import com.creative.backend.domain.BillingOrder;
+import com.creative.backend.domain.BillingOrderRepository;
+import com.creative.backend.domain.Plan;
+import com.creative.backend.domain.PlanRepository;
+import com.creative.backend.domain.ProjectRepository;
+import com.creative.backend.domain.Subscription;
+import com.creative.backend.domain.User;
+import com.creative.backend.security.CurrentUserService;
+import com.creative.backend.web.dto.PayHereCheckoutDto;
+import com.creative.backend.web.dto.PlanDto;
+import com.creative.backend.web.dto.SubscriptionDto;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+
+@RestController
+@RequestMapping("/api/billing")
+public class BillingController {
+
+    private final PlanRepository planRepository;
+    private final SubscriptionService subscriptionService;
+    private final PlanLimitService planLimitService;
+    private final ProjectRepository projectRepository;
+    private final BillingOrderRepository billingOrderRepository;
+    private final PayHereService payHereService;
+    private final CurrentUserService currentUserService;
+
+    public BillingController(
+            PlanRepository planRepository,
+            SubscriptionService subscriptionService,
+            PlanLimitService planLimitService,
+            ProjectRepository projectRepository,
+            BillingOrderRepository billingOrderRepository,
+            PayHereService payHereService,
+            CurrentUserService currentUserService) {
+        this.planRepository = planRepository;
+        this.subscriptionService = subscriptionService;
+        this.planLimitService = planLimitService;
+        this.projectRepository = projectRepository;
+        this.billingOrderRepository = billingOrderRepository;
+        this.payHereService = payHereService;
+        this.currentUserService = currentUserService;
+    }
+
+    @GetMapping("/plans")
+    public List<PlanDto> listPlans() {
+        return planRepository.findByActiveTrueOrderBySortOrderAsc().stream()
+                .map(PlanDto::from)
+                .toList();
+    }
+
+    @GetMapping("/me")
+    public SubscriptionDto me() {
+        User user = currentUserService.requireUser();
+        Subscription sub = subscriptionService.ensureActiveSubscription(user.getId());
+        int projects = (int) projectRepository.countByOwnerId(user.getId());
+        int media = planLimitService.mediaUploadsThisMonth(user.getId());
+        String period = java.time.YearMonth.now().toString();
+        return SubscriptionDto.from(
+                sub, new SubscriptionDto.UsageDto(projects, media, period));
+    }
+
+    @PostMapping("/checkout")
+    public PayHereCheckoutDto checkout(@RequestBody CheckoutRequest request) {
+        if (!payHereService.isConfigured()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "PayHere is not configured. Set PAYHERE_MERCHANT_ID, PAYHERE_MERCHANT_SECRET, and PAYHERE_NOTIFY_URL.");
+        }
+
+        User user = currentUserService.requireUser();
+        if (request.planId() == null || request.planId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "planId is required");
+        }
+
+        Plan plan = planRepository
+                .findById(request.planId().trim().toLowerCase())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown plan"));
+
+        if (!plan.isActive() || plan.getPriceLkr() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Selected plan is not purchasable");
+        }
+
+        Subscription current = subscriptionService.ensureActiveSubscription(user.getId());
+        if (plan.getId().equals(current.getPlan().getId()) && "active".equals(current.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You are already on this plan");
+        }
+
+        String orderId = "PH-" + UUID.randomUUID().toString().replace("-", "").substring(0, 18).toUpperCase();
+        String amount = String.format("%.2f", (double) plan.getPriceLkr());
+        String currency = "LKR";
+
+        BillingOrder order = new BillingOrder();
+        order.setOrderId(orderId);
+        order.setUserId(user.getId());
+        order.setPlanId(plan.getId());
+        order.setAmountLkr(plan.getPriceLkr());
+        order.setStatus("pending");
+        billingOrderRepository.save(order);
+
+        String[] nameParts = splitName(user.getName());
+        return new PayHereCheckoutDto(
+                payHereService.getCheckoutUrl(),
+                payHereService.getMerchantId(),
+                orderId,
+                "CreatIVe " + plan.getName() + " — Monthly",
+                currency,
+                amount,
+                payHereService.checkoutHash(orderId, amount, currency),
+                nameParts[0],
+                nameParts[1],
+                user.getEmail(),
+                "0770000000",
+                "Colombo",
+                "Colombo",
+                "Sri Lanka",
+                payHereService.getReturnUrl(),
+                payHereService.getCancelUrl(),
+                payHereService.getNotifyUrl(),
+                user.getId(),
+                plan.getId());
+    }
+
+    @PostMapping("/payhere/notify")
+    public ResponseEntity<String> payhereNotify(@RequestParam MultiValueMap<String, String> form) {
+        Map<String, String> params = form.toSingleValueMap();
+        String merchantId = params.getOrDefault("merchant_id", "");
+        String orderId = params.getOrDefault("order_id", "");
+        String amount = params.getOrDefault("payhere_amount", params.getOrDefault("amount", ""));
+        String currency = params.getOrDefault("payhere_currency", params.getOrDefault("currency", "LKR"));
+        String statusCode = params.getOrDefault("status_code", "");
+        String md5sig = params.getOrDefault("md5sig", "");
+
+        if (!merchantId.equals(payHereService.getMerchantId())) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("invalid merchant");
+        }
+        if (!payHereService.verifyNotifyHash(orderId, amount, currency, statusCode, md5sig)) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("invalid signature");
+        }
+
+        BillingOrder order = billingOrderRepository
+                .findByOrderId(orderId)
+                .orElse(null);
+        if (order == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("order not found");
+        }
+
+        if ("2".equals(statusCode)) {
+            if (!"paid".equals(order.getStatus())) {
+                order.setStatus("paid");
+                order.setPaidAt(LocalDateTime.now());
+                billingOrderRepository.save(order);
+                subscriptionService.activatePaidPlan(order.getUserId(), order.getPlanId(), orderId);
+            }
+            return ResponseEntity.ok("OK");
+        }
+
+        if ("0".equals(statusCode) || "-1".equals(statusCode) || "-2".equals(statusCode)) {
+            order.setStatus("failed");
+            billingOrderRepository.save(order);
+        }
+        return ResponseEntity.ok("OK");
+    }
+
+    @PostMapping("/cancel")
+    public SubscriptionDto cancel() {
+        User user = currentUserService.requireUser();
+        Subscription sub = subscriptionService.cancelAtPeriodEnd(user.getId());
+        int projects = (int) projectRepository.countByOwnerId(user.getId());
+        int media = planLimitService.mediaUploadsThisMonth(user.getId());
+        return SubscriptionDto.from(
+                sub, new SubscriptionDto.UsageDto(projects, media, java.time.YearMonth.now().toString()));
+    }
+
+    private static String[] splitName(String name) {
+        String trimmed = name == null || name.isBlank() ? "Customer" : name.trim();
+        String[] parts = trimmed.split("\\s+", 2);
+        if (parts.length == 1) {
+            return new String[] {parts[0], "User"};
+        }
+        return parts;
+    }
+
+    public record CheckoutRequest(String planId) {}
+}

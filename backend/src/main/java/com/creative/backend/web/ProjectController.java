@@ -1,5 +1,6 @@
 package com.creative.backend.web;
 
+import com.creative.backend.billing.PlanLimitService;
 import com.creative.backend.domain.Project;
 import com.creative.backend.domain.ProjectPage;
 import com.creative.backend.domain.ProjectRepository;
@@ -31,10 +32,15 @@ public class ProjectController {
 
     private final ProjectRepository projectRepository;
     private final CurrentUserService currentUserService;
+    private final PlanLimitService planLimitService;
 
-    public ProjectController(ProjectRepository projectRepository, CurrentUserService currentUserService) {
+    public ProjectController(
+            ProjectRepository projectRepository,
+            CurrentUserService currentUserService,
+            PlanLimitService planLimitService) {
         this.projectRepository = projectRepository;
         this.currentUserService = currentUserService;
+        this.planLimitService = planLimitService;
     }
 
     @GetMapping
@@ -54,6 +60,7 @@ public class ProjectController {
     @PostMapping
     public ResponseEntity<ProjectDto> create(@RequestBody CreateProjectRequest request) {
         User user = currentUserService.requireUser();
+        planLimitService.requireCanCreateProject(user.getId());
         if (request.name() == null || request.name().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name is required");
         }
@@ -87,6 +94,7 @@ public class ProjectController {
     @PostMapping("/{id}/pages")
     public ProjectDto addPage(@PathVariable UUID id, @RequestBody AddPageRequest request) {
         Project project = requireAccessibleProject(id);
+        planLimitService.requireCanAddPage(project.getOwner().getId(), project.getPages().size());
         if (request.title() == null || request.title().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Title is required");
         }
@@ -134,6 +142,7 @@ public class ProjectController {
         if (request.pages() == null || request.pages().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one page is required");
         }
+        planLimitService.requireCanReplacePages(project.getOwner().getId(), request.pages().size());
 
         Map<UUID, ProjectPage> byId = new HashMap<>();
         for (ProjectPage page : project.getPages()) {

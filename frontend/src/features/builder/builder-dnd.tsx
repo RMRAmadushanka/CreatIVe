@@ -247,24 +247,34 @@ export function PaletteDraggable({
   label,
   hint,
   icon: Icon,
+  locked = false,
+  onLockedClick,
 }: {
   type: ElementType;
   label: string;
   hint: string;
   icon: LucideIcon;
+  locked?: boolean;
+  onLockedClick?: () => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `palette:${type}`,
     data: { from: "palette", type } satisfies PaletteData,
+    disabled: locked,
   });
 
   return (
     <div
       ref={setNodeRef}
-      {...listeners}
-      {...attributes}
+      {...(locked ? {} : listeners)}
+      {...(locked ? {} : attributes)}
+      onClick={locked ? onLockedClick : undefined}
+      title={locked ? "Upgrade your plan to unlock this component" : undefined}
       className={cn(
-        "group flex cursor-grab items-center gap-3 rounded-lg border border-border bg-card p-3 transition-all hover:border-indigo-500/50 hover:bg-accent active:cursor-grabbing",
+        "group flex items-center gap-3 rounded-lg border border-border bg-card p-3 transition-all",
+        locked
+          ? "cursor-not-allowed opacity-50"
+          : "cursor-grab hover:border-indigo-500/50 hover:bg-accent active:cursor-grabbing",
         isDragging && "opacity-40",
       )}
     >
@@ -272,7 +282,10 @@ export function PaletteDraggable({
         <Icon className="h-4 w-4" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium leading-tight">{label}</div>
+        <div className="text-sm font-medium leading-tight">
+          {label}
+          {locked ? " · Upgrade" : ""}
+        </div>
         <div className="truncate text-xs text-muted-foreground">{hint}</div>
       </div>
     </div>

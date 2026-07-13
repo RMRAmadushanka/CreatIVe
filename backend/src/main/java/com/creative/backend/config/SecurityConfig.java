@@ -33,6 +33,8 @@ public class SecurityConfig {
         if (issuerUri != null && !issuerUri.isBlank()) {
             http.authorizeHttpRequests(auth -> auth
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/billing/payhere/notify").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/billing/plans").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/pages/*").permitAll()
                     .requestMatchers("/api/auth/**").authenticated()
                     .requestMatchers("/api/admin/**").hasRole("ADMIN")

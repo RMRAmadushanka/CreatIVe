@@ -1,5 +1,6 @@
 package com.creative.backend.security;
 
+import com.creative.backend.billing.SubscriptionService;
 import com.creative.backend.domain.User;
 import com.creative.backend.domain.UserRepository;
 import com.creative.backend.domain.UserRole;
@@ -7,6 +8,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
@@ -19,12 +21,15 @@ import org.springframework.stereotype.Component;
 public class SupabaseJwtAuthenticationConverter implements Converter<Jwt, AbstractAuthenticationToken> {
 
     private final UserRepository userRepository;
+    private final SubscriptionService subscriptionService;
     private final String bootstrapAdminEmail;
 
     public SupabaseJwtAuthenticationConverter(
             UserRepository userRepository,
+            @Lazy SubscriptionService subscriptionService,
             @Value("${app.bootstrap-admin-email:}") String bootstrapAdminEmail) {
         this.userRepository = userRepository;
+        this.subscriptionService = subscriptionService;
         this.bootstrapAdminEmail = bootstrapAdminEmail == null ? "" : bootstrapAdminEmail.trim().toLowerCase();
     }
 
@@ -65,7 +70,9 @@ public class SupabaseJwtAuthenticationConverter implements Converter<Jwt, Abstra
         user.setEmail(email);
         user.setName(name);
         user.setRole(role);
-        return userRepository.save(user);
+        User saved = userRepository.save(user);
+        subscriptionService.ensureActiveSubscription(saved.getId());
+        return saved;
     }
 
     private String readName(Jwt jwt) {

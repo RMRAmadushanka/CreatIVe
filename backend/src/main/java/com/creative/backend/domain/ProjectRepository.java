@@ -21,4 +21,6 @@ public interface ProjectRepository extends JpaRepository<Project, UUID> {
     @EntityGraph(attributePaths = {"owner", "pages"})
     @Query("SELECT p FROM Project p WHERE p.id = :id")
     Optional<Project> findDetailedById(@Param("id") UUID id);
+
+    long countByOwnerId(String ownerId);
 }

@@ -16,6 +16,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DashboardProjectsRouteImport } from './routes/dashboard.projects'
 import { Route as DashboardProfileRouteImport } from './routes/dashboard.profile'
+import { Route as DashboardBillingRouteImport } from './routes/dashboard.billing'
 import { Route as DashboardAdminRouteImport } from './routes/dashboard.admin'
 import { Route as DashboardProjectsProjectIdRouteImport } from './routes/dashboard.projects.$projectId'
 import { Route as DashboardAdminUsersRouteImport } from './routes/dashboard.admin.users'
@@ -57,6 +58,11 @@ const DashboardProfileRoute = DashboardProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardBillingRoute = DashboardBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardAdminRoute = DashboardAdminRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -90,6 +96,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRouteWithChildren
   '/media-library': typeof MediaLibraryRoute
   '/dashboard/admin': typeof DashboardAdminRouteWithChildren
+  '/dashboard/billing': typeof DashboardBillingRoute
   '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/projects': typeof DashboardProjectsRouteWithChildren
   '/dashboard/': typeof DashboardIndexRoute
@@ -103,6 +110,7 @@ export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/media-library': typeof MediaLibraryRoute
   '/dashboard/admin': typeof DashboardAdminRouteWithChildren
+  '/dashboard/billing': typeof DashboardBillingRoute
   '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/projects': typeof DashboardProjectsRouteWithChildren
   '/dashboard': typeof DashboardIndexRoute
@@ -118,6 +126,7 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRouteWithChildren
   '/media-library': typeof MediaLibraryRoute
   '/dashboard/admin': typeof DashboardAdminRouteWithChildren
+  '/dashboard/billing': typeof DashboardBillingRoute
   '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/projects': typeof DashboardProjectsRouteWithChildren
   '/dashboard/': typeof DashboardIndexRoute
@@ -134,6 +143,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/media-library'
     | '/dashboard/admin'
+    | '/dashboard/billing'
     | '/dashboard/profile'
     | '/dashboard/projects'
     | '/dashboard/'
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/media-library'
     | '/dashboard/admin'
+    | '/dashboard/billing'
     | '/dashboard/profile'
     | '/dashboard/projects'
     | '/dashboard'
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/media-library'
     | '/dashboard/admin'
+    | '/dashboard/billing'
     | '/dashboard/profile'
     | '/dashboard/projects'
     | '/dashboard/'
@@ -226,6 +238,13 @@ declare module '@tanstack/react-router' {
       path: '/profile'
       fullPath: '/dashboard/profile'
       preLoaderRoute: typeof DashboardProfileRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/billing': {
+      id: '/dashboard/billing'
+      path: '/billing'
+      fullPath: '/dashboard/billing'
+      preLoaderRoute: typeof DashboardBillingRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/admin': {
@@ -295,6 +314,7 @@ const DashboardProjectsRouteWithChildren =
 
 interface DashboardRouteChildren {
   DashboardAdminRoute: typeof DashboardAdminRouteWithChildren
+  DashboardBillingRoute: typeof DashboardBillingRoute
   DashboardProfileRoute: typeof DashboardProfileRoute
   DashboardProjectsRoute: typeof DashboardProjectsRouteWithChildren
   DashboardIndexRoute: typeof DashboardIndexRoute
@@ -302,6 +322,7 @@ interface DashboardRouteChildren {
 
 const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardAdminRoute: DashboardAdminRouteWithChildren,
+  DashboardBillingRoute: DashboardBillingRoute,
   DashboardProfileRoute: DashboardProfileRoute,
   DashboardProjectsRoute: DashboardProjectsRouteWithChildren,
   DashboardIndexRoute: DashboardIndexRoute,
@@ -320,12 +341,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}
