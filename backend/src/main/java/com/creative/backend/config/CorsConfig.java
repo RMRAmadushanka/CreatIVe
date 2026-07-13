@@ -15,29 +15,29 @@ public class CorsConfig {
     private final List<String> allowedOriginPatterns;
 
     public CorsConfig(
-            @Value("${app.cors.allowed-origin-patterns:http://localhost:[*],http://127.0.0.1:[*]}")
-                    String allowedOriginPatterns) {
-        this.allowedOriginPatterns = Arrays.stream(allowedOriginPatterns.split(","))
+            @Value("${app.cors.allowed-origin-patterns:*}") String allowedOriginPatterns) {
+        List<String> parsed = Arrays.stream(allowedOriginPatterns.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toList();
+        this.allowedOriginPatterns = parsed.isEmpty() ? List.of("*") : parsed;
     }
 
     /**
-     * Explicit bean so Spring Security's {@code http.cors()} applies the same rules
-     * (WebMvc-only CORS is easy to miss behind the security filter chain).
+     * Explicit bean so Spring Security's {@code http.cors()} applies the same rules.
+     * Default pattern is {@code *} so local + Railway frontends work without extra config.
      */
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOriginPatterns(allowedOriginPatterns);
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
         config.setAllowedHeaders(List.of("*"));
+        config.setExposedHeaders(List.of("*"));
         config.setAllowCredentials(true);
         config.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/api/**", config);
         source.registerCorsConfiguration("/**", config);
         return source;
     }
