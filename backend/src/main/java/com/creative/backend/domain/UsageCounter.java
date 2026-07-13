@@ -18,7 +18,7 @@ public class UsageCounter {
     private String userId;
 
     @Id
-    @Column(name = "period_yyyy_mm", nullable = false, length = 7)
+    @Column(name = "period_yyyy_mm", nullable = false, length = 7, columnDefinition = "char(7)")
     private String periodYyyyMm;
 
     @Column(name = "media_uploads", nullable = false)
