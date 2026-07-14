@@ -18,6 +18,7 @@ import com.creative.backend.web.dto.SubscriptionDto;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -119,12 +120,13 @@ public class BillingController {
                     "You can renew when your period ends within 7 days, or if payment is past due.");
         }
 
-        String orderId = "PH-" + UUID.randomUUID().toString().replace("-", "").substring(0, 18).toUpperCase();
-        String amount = String.format("%.2f", (double) target.getPriceLkr());
+        // PayHere requires US-style decimals in both amount + hash (never locale commas).
+        String orderId = "PH" + UUID.randomUUID().toString().replace("-", "").substring(0, 18).toUpperCase();
+        String amount = String.format(Locale.US, "%.2f", (double) target.getPriceLkr());
         String currency = "LKR";
         String itemLabel = kind == ChangeKind.RENEW
-                ? "CreatIVe " + target.getName() + " — Monthly renewal"
-                : "CreatIVe " + target.getName() + " — Upgrade";
+                ? "CreatIVe " + target.getName() + " Monthly renewal"
+                : "CreatIVe " + target.getName() + " Upgrade";
 
         BillingOrder order = new BillingOrder();
         order.setOrderId(orderId);

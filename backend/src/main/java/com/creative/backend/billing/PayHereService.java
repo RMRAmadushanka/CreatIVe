@@ -3,6 +3,7 @@ package com.creative.backend.billing;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -23,12 +24,43 @@ public class PayHereService {
             @Value("${payhere.notify-url:}") String notifyUrl,
             @Value("${payhere.return-url:}") String returnUrl,
             @Value("${payhere.cancel-url:}") String cancelUrl) {
-        this.merchantId = merchantId == null ? "" : merchantId.trim();
-        this.merchantSecret = merchantSecret == null ? "" : merchantSecret.trim();
+        this.merchantId = normalizeCredential(merchantId);
+        this.merchantSecret = normalizeMerchantSecret(merchantSecret);
         this.mode = mode == null || mode.isBlank() ? "sandbox" : mode.trim().toLowerCase();
         this.notifyUrl = notifyUrl == null ? "" : notifyUrl.trim();
         this.returnUrl = returnUrl == null ? "" : returnUrl.trim();
         this.cancelUrl = cancelUrl == null ? "" : cancelUrl.trim();
+    }
+
+    /** Strip quotes/whitespace; unwrap accidental Base64 of alphanumeric secrets. */
+    static String normalizeMerchantSecret(String raw) {
+        String s = normalizeCredential(raw);
+        if (s.isBlank()) {
+            return s;
+        }
+        // PayHere secrets are plain text. Some envs store them Base64-encoded by mistake.
+        if (s.matches("^[A-Za-z0-9+/]+={0,2}$") && s.length() % 4 == 0) {
+            try {
+                String decoded = new String(Base64.getDecoder().decode(s), StandardCharsets.UTF_8);
+                if (decoded.matches("^[A-Za-z0-9]+$") && decoded.length() >= 16) {
+                    return decoded;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // keep original
+            }
+        }
+        return s;
+    }
+
+    private static String normalizeCredential(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String s = raw.trim();
+        if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
+            s = s.substring(1, s.length() - 1).trim();
+        }
+        return s;
     }
 
     public boolean isConfigured() {
