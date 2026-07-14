@@ -118,7 +118,9 @@ function BillingPage() {
 
   const sub = subQuery.data;
   const plans = plansQuery.data ?? [];
-  const busy =
+  const checkoutPlanId = checkoutMutation.isPending ? (checkoutMutation.variables ?? null) : null;
+  const schedulePlanId = scheduleMutation.isPending ? (scheduleMutation.variables ?? null) : null;
+  const anyActionBusy =
     checkoutMutation.isPending ||
     scheduleMutation.isPending ||
     cancelMutation.isPending ||
@@ -146,7 +148,7 @@ function BillingPage() {
       ) : sub ? (
         <CurrentPlanPanel
           sub={sub}
-          busy={busy}
+          busy={anyActionBusy}
           onCancel={() => cancelMutation.mutate()}
           onResume={() => resumeMutation.mutate()}
           onRenew={() => checkoutMutation.mutate(sub.plan.id)}
@@ -159,7 +161,8 @@ function BillingPage() {
             key={plan.id}
             plan={plan}
             sub={sub}
-            busy={busy}
+            loading={checkoutPlanId === plan.id || schedulePlanId === plan.id}
+            disabled={anyActionBusy}
             onUpgrade={() => checkoutMutation.mutate(plan.id)}
             onRenew={() => checkoutMutation.mutate(plan.id)}
             onDowngrade={() => scheduleMutation.mutate(plan.id)}
@@ -305,14 +308,16 @@ function UsageStat({
 function PlanCard({
   plan,
   sub,
-  busy,
+  loading,
+  disabled,
   onUpgrade,
   onRenew,
   onDowngrade,
 }: {
   plan: Plan;
   sub?: Subscription;
-  busy: boolean;
+  loading: boolean;
+  disabled: boolean;
   onUpgrade: () => void;
   onRenew: () => void;
   onDowngrade: () => void;
@@ -395,13 +400,13 @@ function PlanCard({
             className="w-full"
             variant={action.variant ?? "default"}
             disabled={
-              busy ||
+              disabled ||
               action.label === "Current plan" ||
               action.label === "Scheduled"
             }
             onClick={action.onClick}
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : action.label}
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : action.label}
           </Button>
         )}
         {kind === "downgrade" && !current && !pendingThis && (
