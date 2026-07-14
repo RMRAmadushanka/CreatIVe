@@ -31,7 +31,9 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
         height={32}
       />
       {!compact && (
-        <span className="text-sm font-semibold tracking-tight text-foreground">{APP_NAME}</span>
+        <span className="text-base font-semibold tracking-tight text-foreground sm:text-lg">
+          {APP_NAME}
+        </span>
       )}
     </Link>
   );
