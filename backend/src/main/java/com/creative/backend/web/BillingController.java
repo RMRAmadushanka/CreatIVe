@@ -69,6 +69,12 @@ public class BillingController {
                 .toList();
     }
 
+    /** Public health check for PayHere env wiring (no secrets exposed). */
+    @GetMapping("/payhere/status")
+    public Map<String, Object> payhereStatus() {
+        return payHereService.statusSummary();
+    }
+
     @GetMapping("/me")
     public SubscriptionDto me() {
         User user = currentUserService.requireUser();

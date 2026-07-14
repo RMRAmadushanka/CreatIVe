@@ -35,6 +35,7 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/billing/payhere/notify").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/billing/plans").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/billing/payhere/status").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/pages/*").permitAll()
                     .requestMatchers("/api/auth/**").authenticated()
                     .requestMatchers("/api/admin/**").hasRole("ADMIN")
