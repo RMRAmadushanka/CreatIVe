@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { APP_ICON_URL, APP_LOGO_URL, APP_NAME } from "@/constants/app";
+import { APP_ICON_URL, APP_NAME } from "@/constants/app";
 import { cn } from "@/utils/cn";
 
 const homeSearch = { project: undefined, page: undefined } as const;
@@ -20,33 +20,18 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
     <Link
       to="/"
       search={homeSearch}
-      className="inline-flex shrink-0 items-center"
+      className="inline-flex shrink-0 items-center gap-2"
       aria-label={APP_NAME}
     >
-      {compact ? (
-        <img
-          src={APP_ICON_URL}
-          alt=""
-          className="h-8 w-8 rounded-md object-contain"
-          width={32}
-          height={32}
-        />
-      ) : (
-        <>
-          <img
-            src={APP_LOGO_URL}
-            alt={APP_NAME}
-            className="hidden h-8 w-auto object-contain sm:block"
-            height={32}
-          />
-          <img
-            src={APP_ICON_URL}
-            alt={APP_NAME}
-            className="h-8 w-8 rounded-md object-contain sm:hidden"
-            width={32}
-            height={32}
-          />
-        </>
+      <img
+        src={APP_ICON_URL}
+        alt=""
+        className="h-8 w-8 rounded-md object-contain"
+        width={32}
+        height={32}
+      />
+      {!compact && (
+        <span className="text-sm font-semibold tracking-tight text-foreground">{APP_NAME}</span>
       )}
     </Link>
   );
