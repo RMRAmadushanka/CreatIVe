@@ -1,5 +1,6 @@
 package com.creative.backend.domain;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -9,4 +10,8 @@ import org.springframework.stereotype.Repository;
 public interface BillingOrderRepository extends JpaRepository<BillingOrder, UUID> {
 
     Optional<BillingOrder> findByOrderId(String orderId);
+
+    Optional<BillingOrder> findFirstByUserIdAndStatusOrderByCreatedAtDesc(String userId, String status);
+
+    List<BillingOrder> findByUserIdOrderByCreatedAtDesc(String userId);
 }

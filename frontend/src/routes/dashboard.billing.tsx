@@ -48,15 +48,51 @@ function BillingPage() {
   const subQuery = useQuery({ queryKey: ["billing", "me"], queryFn: getMySubscription });
 
   useEffect(() => {
-    if (status === "success") {
-      clearPendingPlan();
-      toast.success("Payment received — refreshing your plan…");
-      void queryClient.invalidateQueries({ queryKey: ["billing", "me"] });
-      void navigate({ to: "/dashboard/billing", search: {}, replace: true });
-    } else if (status === "cancel") {
+    if (status !== "success" && status !== "cancel") return;
+
+    if (status === "cancel") {
       toast.message("Checkout cancelled — you can retry anytime from Billing");
       void navigate({ to: "/dashboard/billing", search: {}, replace: true });
+      return;
     }
+
+    // PayHere notify can arrive a few seconds after the browser return URL.
+    // Poll until the plan upgrades off Free (or timeout).
+    let cancelled = false;
+    clearPendingPlan();
+    toast.message("Payment received — confirming your plan…");
+
+    const started = Date.now();
+    const poll = async () => {
+      while (!cancelled && Date.now() - started < 25_000) {
+        try {
+          await queryClient.invalidateQueries({ queryKey: ["billing", "me"] });
+          const sub = await queryClient.fetchQuery({
+            queryKey: ["billing", "me"],
+            queryFn: getMySubscription,
+          });
+          if (sub.plan.id !== "free" && sub.status === "active") {
+            toast.success(`You're on ${sub.plan.name}`);
+            void navigate({ to: "/dashboard/billing", search: {}, replace: true });
+            return;
+          }
+        } catch {
+          // keep polling
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      if (!cancelled) {
+        toast.message(
+          "Payment may still be confirming — refresh Billing in a moment. If it stays Free, the PayHere notify callback may have failed.",
+        );
+        void navigate({ to: "/dashboard/billing", search: {}, replace: true });
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+    };
   }, [status, queryClient, navigate]);
 
   const checkoutMutation = useMutation({
