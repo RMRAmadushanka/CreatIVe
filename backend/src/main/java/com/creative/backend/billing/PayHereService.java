@@ -46,12 +46,14 @@ public class PayHereService {
 
     static SecretFormat parseSecretFormat(String raw) {
         if (raw == null || raw.isBlank()) {
-            return SecretFormat.AUTO;
+            // RAW by default: PayHere secrets themselves look Base64 (end with ==) and
+            // must be used verbatim. Only decode when explicitly told to.
+            return SecretFormat.RAW;
         }
         return switch (raw.trim().toLowerCase()) {
-            case "raw", "plain" -> SecretFormat.RAW;
             case "base64", "b64" -> SecretFormat.BASE64;
-            default -> SecretFormat.AUTO;
+            case "auto" -> SecretFormat.AUTO;
+            default -> SecretFormat.RAW;
         };
     }
 
@@ -144,24 +146,27 @@ public class PayHereService {
     }
 
     public Map<String, Object> statusSummary() {
-        boolean autoDecoded =
-                secretFormat == SecretFormat.AUTO
-                        && !merchantSecret.equals(rawMerchantSecret)
-                        && looksLikePayHereSecret(merchantSecret);
+        boolean secretChanged = !merchantSecret.equals(rawMerchantSecret);
 
-        return Map.of(
-                "configured", isConfigured(),
-                "mode", mode,
-                "merchantId", merchantId.isBlank() ? "" : maskTail(merchantId, 4),
-                "secretFormat", secretFormat.name().toLowerCase(),
-                "secretAutoDecoded", autoDecoded,
-                "checkoutUrl", getCheckoutUrl(),
-                "notifyUrl", notifyUrl,
-                "returnUrl", returnUrl,
-                "cancelUrl", cancelUrl,
-                "hint", autoDecoded
-                        ? "Merchant secret was Base64-decoded for hash generation. Prefer storing the plain numeric secret from PayHere."
-                        : "Ensure PAYHERE_MERCHANT_SECRET matches the secret for creat-i-ve.vercel.app in PayHere Integrations.");
+        Map<String, Object> summary = new java.util.LinkedHashMap<>();
+        summary.put("configured", isConfigured());
+        summary.put("mode", mode);
+        summary.put("merchantId", merchantId);
+        summary.put("secretFormat", secretFormat.name().toLowerCase());
+        summary.put("secretChangedFromEnv", secretChanged);
+        summary.put("secretLength", merchantSecret.length());
+        summary.put("secretMd5Upper", merchantSecret.isBlank() ? "" : md5(merchantSecret).toUpperCase());
+        summary.put("checkoutUrl", getCheckoutUrl());
+        summary.put("notifyUrl", notifyUrl);
+        summary.put("returnUrl", returnUrl);
+        summary.put("cancelUrl", cancelUrl);
+        // Sample hash for a known input so we can compare against a local computation.
+        summary.put("sampleOrderId", "SAMPLE123");
+        summary.put("sampleHashLkr2990", checkoutHash("SAMPLE123", "2990.00", "LKR"));
+        summary.put(
+                "hint",
+                "Ensure PAYHERE_MERCHANT_SECRET matches the secret for your paying domain in PayHere Integrations, used verbatim (raw).");
+        return summary;
     }
 
     private static String maskTail(String value, int visible) {
