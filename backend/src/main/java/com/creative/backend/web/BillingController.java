@@ -139,6 +139,21 @@ public class BillingController {
         billingOrderRepository.save(order);
 
         String[] nameParts = splitName(user.getName());
+        String hash = payHereService.checkoutHashPreformatted(orderId, amount, currency);
+
+        // Diagnostic (no secret logged): compare merchant_id / mode / checkout URL / hash on the
+        // deployed server against your PayHere sandbox account when debugging "Unauthorized payment
+        // request" errors.
+        log.info(
+                "PayHere checkout prepared: sandbox={} checkoutUrl={} merchant_id={} order_id={} amount={} {} hash={}",
+                payHereService.isSandbox(),
+                payHereService.getCheckoutUrl(),
+                payHereService.getMerchantId(),
+                orderId,
+                amount,
+                currency,
+                hash);
+
         return new PayHereCheckoutDto(
                 payHereService.getCheckoutUrl(),
                 payHereService.getMerchantId(),
@@ -146,7 +161,7 @@ public class BillingController {
                 itemLabel,
                 currency,
                 amount,
-                payHereService.checkoutHashPreformatted(orderId, amount, currency),
+                hash,
                 nameParts[0],
                 nameParts[1],
                 user.getEmail(),
