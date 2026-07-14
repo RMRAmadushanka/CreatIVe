@@ -217,7 +217,7 @@ function CurrentPlanPanel({
         <div className="flex flex-wrap gap-2">
           {pastDue && sub.plan.id !== "free" && (
             <Button size="sm" disabled={busy} onClick={onRenew}>
-              Renew now
+              Pay & renew now
             </Button>
           )}
           {hasSchedule ? (
@@ -336,20 +336,26 @@ function PlanCard({
 
   if (current) {
     if (sub?.status === "past_due") {
-      action = { label: "Renew now", onClick: onRenew };
+      action = { label: "Pay & renew now", onClick: onRenew };
     } else if (
       plan.priceLkr > 0 &&
       sub?.currentPeriodEnd &&
       new Date(sub.currentPeriodEnd).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000
     ) {
-      action = { label: "Renew early", onClick: onRenew, variant: "outline" };
+      action = { label: "Pay & renew early", onClick: onRenew, variant: "outline" };
     } else {
       action = { label: "Current plan", onClick: () => {}, variant: "secondary" };
     }
   } else if (pendingThis) {
     action = { label: "Scheduled", onClick: () => {}, variant: "secondary" };
   } else if (kind === "upgrade") {
-    action = { label: `Upgrade to ${plan.name}`, onClick: onUpgrade };
+    action = {
+      label:
+        plan.priceLkr > 0
+          ? `Subscribe & pay — ${plan.name}`
+          : `Upgrade to ${plan.name}`,
+      onClick: onUpgrade,
+    };
   } else if (kind === "downgrade") {
     action = {
       label: plan.priceLkr <= 0 ? "Switch to Free at period end" : `Downgrade to ${plan.name}`,
@@ -357,7 +363,7 @@ function PlanCard({
       variant: "outline",
     };
   } else if (kind === "renew") {
-    action = { label: "Renew", onClick: onRenew };
+    action = { label: "Renew & pay", onClick: onRenew };
   }
 
   return (
@@ -403,9 +409,14 @@ function PlanCard({
             Takes effect at period end. No immediate charge.
           </p>
         )}
-        {kind === "upgrade" && !current && (
+        {kind === "upgrade" && !current && plan.priceLkr > 0 && (
           <p className="mt-2 text-center text-[11px] text-muted-foreground">
-            Activates immediately after payment.
+            Opens PayHere — plan activates right after payment.
+          </p>
+        )}
+        {kind === "renew" && !current && (
+          <p className="mt-2 text-center text-[11px] text-muted-foreground">
+            PayHere checkout for another billing period.
           </p>
         )}
       </div>

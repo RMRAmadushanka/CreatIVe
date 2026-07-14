@@ -211,7 +211,7 @@ function MarketingPlanCard({
         {cta ??
           (plan.priceLkr <= 0
             ? "Start free — create account"
-            : `Choose ${plan.name} — continue to signup`)}
+            : `Choose ${plan.name} — signup & pay`)}
       </Button>
     </div>
   );

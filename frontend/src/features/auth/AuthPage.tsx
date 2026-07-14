@@ -12,20 +12,13 @@ import {
   isPaidPlanId,
   setPendingPlan,
 } from "@/lib/pending-plan";
+import { createCheckout, submitPayHereCheckout } from "@/services/billing.service";
 import { ShieldCheck } from "lucide-react";
 
 function resolvePostLoginTarget(redirect?: string): {
-  to: "/dashboard" | "/" | "/media-library" | "/dashboard/billing";
+  to: "/dashboard" | "/" | "/media-library";
   search?: Record<string, string | undefined>;
 } {
-  const pending = getPendingPlan();
-  if (isPaidPlanId(pending)) {
-    return {
-      to: "/dashboard/billing",
-      search: { checkout: pending!, status: undefined },
-    };
-  }
-
   if (!redirect) {
     return { to: "/dashboard" };
   }
@@ -51,12 +44,28 @@ function resolvePostLoginTarget(redirect?: string): {
   }
 }
 
+/** Start PayHere for a paid plan, or fall back to Billing if checkout fails. */
+async function startPaidPlanCheckout(planId: string): Promise<"payhere" | "billing"> {
+  try {
+    toast.message(`Opening PayHere for ${planId}…`);
+    const payload = await createCheckout(planId);
+    clearPendingPlan();
+    submitPayHereCheckout(payload);
+    return "payhere";
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : "Could not start payment");
+    return "billing";
+  }
+}
+
 export function AuthPage() {
   const navigate = useNavigate();
   const { redirect, plan, mode: modeFromUrl } = useSearch({ from: "/auth" });
   const user = useAuth();
   const authReady = useAuthReady();
-  const [mode, setMode] = useState<"signin" | "signup">(modeFromUrl === "signup" ? "signup" : "signin");
+  const [mode, setMode] = useState<"signin" | "signup">(
+    modeFromUrl === "signup" ? "signup" : "signin",
+  );
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -75,13 +84,24 @@ export function AuthPage() {
     }
   }, [modeFromUrl]);
 
-  const goAfterLogin = () => {
+  const goAfterLogin = async () => {
     if (didRedirect.current) return;
     didRedirect.current = true;
 
-    const pending = getPendingPlan();
+    const pending = getPendingPlan() ?? selectedPlan;
     if (pending === "free") {
       clearPendingPlan();
+    }
+
+    // Paid plan from home → ask for payment immediately after auth.
+    if (isPaidPlanId(pending)) {
+      const result = await startPaidPlanCheckout(pending!);
+      if (result === "payhere") return;
+      void navigate({
+        to: "/dashboard/billing",
+        search: { status: undefined, checkout: pending! },
+      });
+      return;
     }
 
     const target = resolvePostLoginTarget(redirect);
@@ -95,23 +115,13 @@ export function AuthPage() {
       });
       return;
     }
-    if (target.to === "/dashboard/billing") {
-      void navigate({
-        to: "/dashboard/billing",
-        search: {
-          status: undefined,
-          checkout: target.search?.checkout,
-        },
-      });
-      return;
-    }
 
     void navigate({ to: target.to, search: target.search });
   };
 
   useEffect(() => {
     if (authReady && user && !busy) {
-      goAfterLogin();
+      void goAfterLogin();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authReady, user, busy]);
@@ -131,7 +141,7 @@ export function AuthPage() {
         await authStore.signUp(name, email, password);
       }
       toast.success(mode === "signin" ? "Signed in" : "Account created");
-      goAfterLogin();
+      await goAfterLogin();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Authentication failed");
     } finally {
@@ -155,10 +165,12 @@ export function AuthPage() {
                 ? mode === "signup"
                   ? `Selected plan: ${selectedPlan.charAt(0).toUpperCase()}${selectedPlan.slice(1)}${
                       isPaidPlanId(selectedPlan)
-                        ? " — checkout after signup"
+                        ? " — PayHere payment right after signup"
                         : " — starts instantly"
                     }`
-                  : "Sign in to continue to your workspace."
+                  : isPaidPlanId(selectedPlan)
+                    ? `Sign in, then pay for ${selectedPlan} on PayHere`
+                    : "Sign in to continue to your workspace."
                 : "Sign in to use the page builder and dashboard."}
             </p>
           </div>
@@ -170,7 +182,9 @@ export function AuthPage() {
             <button
               type="button"
               className="font-medium text-primary hover:underline"
-              onClick={() => void navigate({ to: "/", search: { project: undefined, page: undefined } })}
+              onClick={() =>
+                void navigate({ to: "/", search: { project: undefined, page: undefined } })
+              }
             >
               Choose a plan on the home page
             </button>{" "}
@@ -215,11 +229,15 @@ export function AuthPage() {
 
           <Button type="submit" className="w-full" disabled={busy}>
             {busy
-              ? "Please wait…"
+              ? isPaidPlanId(selectedPlan)
+                ? "Creating account & opening payment…"
+                : "Please wait…"
               : mode === "signin"
-                ? "Sign In"
+                ? isPaidPlanId(selectedPlan)
+                  ? `Sign in & pay for ${selectedPlan}`
+                  : "Sign In"
                 : selectedPlan && isPaidPlanId(selectedPlan)
-                  ? `Create account & continue to ${selectedPlan}`
+                  ? `Create account & pay for ${selectedPlan}`
                   : "Create account"}
           </Button>
         </form>

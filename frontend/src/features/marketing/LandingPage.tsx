@@ -73,8 +73,8 @@ export function LandingPage() {
         <div className="mx-auto max-w-6xl px-6 py-16">
           <h2 className="text-2xl font-semibold tracking-tight">Choose your plan</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Select a plan first, then sign up. Free starts instantly. Pro and Business continue to
-            PayHere checkout after your account is created.
+            Select a plan, then sign up. Free starts instantly. Pro and Business open PayHere so you
+            can pay right after your account is created.
           </p>
           <div className="mt-8">
             <PlanSelectCards onSelect={choosePlan} />
@@ -90,8 +90,8 @@ export function LandingPage() {
             <Step n="2" title="Create your account" body="Sign up — we remember the plan you chose." />
             <Step
               n="3"
-              title="Confirm payment if needed"
-              body="Free is ready immediately. Paid plans open PayHere to activate."
+              title="Pay on PayHere"
+              body="Free is ready immediately. Pro and Business open PayHere so you can pay and activate."
             />
           </ol>
           <div className="mt-8 flex items-center gap-2 text-sm text-muted-foreground">
