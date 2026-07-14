@@ -1,20 +1,24 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { Check, CreditCard, Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, Check, CreditCard, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
 import {
   cancelSubscription,
+  classifyPlanChange,
   createCheckout,
+  formatDate,
   formatLimit,
   formatPriceLkr,
   getMySubscription,
   listPlans,
+  resumeSubscription,
+  schedulePlanChange,
   submitPayHereCheckout,
 } from "@/services/billing.service";
-import type { Plan } from "@/types/billing.types";
+import type { Plan, PlanChangeKind, Subscription } from "@/types/billing.types";
 
 type BillingSearch = { status?: "success" | "cancel" | string };
 
@@ -53,6 +57,19 @@ function BillingPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const scheduleMutation = useMutation({
+    mutationFn: (planId: string) => schedulePlanChange(planId),
+    onSuccess: async (sub) => {
+      await queryClient.invalidateQueries({ queryKey: ["billing", "me"] });
+      toast.success(
+        sub.pendingPlan
+          ? `Scheduled switch to ${sub.pendingPlan.name} at period end`
+          : "Plan change scheduled",
+      );
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   const cancelMutation = useMutation({
     mutationFn: cancelSubscription,
     onSuccess: async () => {
@@ -62,17 +79,30 @@ function BillingPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const resumeMutation = useMutation({
+    mutationFn: resumeSubscription,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["billing", "me"] });
+      toast.success("Scheduled change cancelled — your current plan continues");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   const sub = subQuery.data;
   const plans = plansQuery.data ?? [];
-  const currentPlanId = sub?.plan.id;
+  const busy =
+    checkoutMutation.isPending ||
+    scheduleMutation.isPending ||
+    cancelMutation.isPending ||
+    resumeMutation.isPending;
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Billing & plans</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Sri Lanka payments via PayHere (sandbox). Limits apply to projects, pages, media uploads,
-          and builder components.
+          Upgrades apply immediately after PayHere payment. Downgrades and cancel take effect at
+          period end — your data is never deleted.
         </p>
       </div>
 
@@ -86,54 +116,13 @@ function BillingPage() {
           {(subQuery.error as Error).message}
         </div>
       ) : sub ? (
-        <div className="rounded-xl border border-border/60 bg-card/60 p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CreditCard className="h-4 w-4" />
-                Current plan
-              </div>
-              <div className="mt-1 text-xl font-semibold">{sub.plan.name}</div>
-              <div className="text-sm text-muted-foreground">
-                {formatPriceLkr(sub.plan.priceLkr)} · status {sub.status}
-                {sub.cancelAtPeriodEnd ? " · cancels at period end" : ""}
-              </div>
-            </div>
-            {sub.plan.id !== "free" && !sub.cancelAtPeriodEnd && (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={cancelMutation.isPending}
-                onClick={() => cancelMutation.mutate()}
-              >
-                Cancel at period end
-              </Button>
-            )}
-          </div>
-
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <UsageStat
-              label="Projects"
-              value={`${sub.usage.projectsUsed} / ${formatLimit(sub.plan.maxProjects)}`}
-            />
-            <UsageStat
-              label="Pages / project"
-              value={formatLimit(sub.plan.maxPagesPerProject)}
-            />
-            <UsageStat
-              label="Media uploads (month)"
-              value={`${sub.usage.mediaUploadsThisMonth} / ${formatLimit(sub.plan.maxMediaUploadsMonth)}`}
-            />
-            <UsageStat
-              label="Builder components"
-              value={
-                sub.plan.allBuilderComponents
-                  ? "All"
-                  : `${sub.plan.builderComponents.length} included`
-              }
-            />
-          </div>
-        </div>
+        <CurrentPlanPanel
+          sub={sub}
+          busy={busy}
+          onCancel={() => cancelMutation.mutate()}
+          onResume={() => resumeMutation.mutate()}
+          onRenew={() => checkoutMutation.mutate(sub.plan.id)}
+        />
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -141,9 +130,11 @@ function BillingPage() {
           <PlanCard
             key={plan.id}
             plan={plan}
-            current={plan.id === currentPlanId}
-            busy={checkoutMutation.isPending}
+            sub={sub}
+            busy={busy}
             onUpgrade={() => checkoutMutation.mutate(plan.id)}
+            onRenew={() => checkoutMutation.mutate(plan.id)}
+            onDowngrade={() => scheduleMutation.mutate(plan.id)}
           />
         ))}
       </div>
@@ -151,9 +142,132 @@ function BillingPage() {
   );
 }
 
-function UsageStat({ label, value }: { label: string; value: string }) {
+function CurrentPlanPanel({
+  sub,
+  busy,
+  onCancel,
+  onResume,
+  onRenew,
+}: {
+  sub: Subscription;
+  busy: boolean;
+  onCancel: () => void;
+  onResume: () => void;
+  onRenew: () => void;
+}) {
+  const pastDue = sub.status === "past_due";
+  const hasSchedule = Boolean(sub.pendingPlan) || sub.cancelAtPeriodEnd;
+
   return (
-    <div className="rounded-lg border border-border/50 bg-background/40 px-3 py-2">
+    <div
+      className={cn(
+        "rounded-xl border p-5",
+        pastDue
+          ? "border-amber-500/40 bg-amber-500/5"
+          : "border-border/60 bg-card/60",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <CreditCard className="h-4 w-4" />
+            Current plan
+          </div>
+          <div className="mt-1 text-xl font-semibold">{sub.plan.name}</div>
+          <div className="text-sm text-muted-foreground">
+            {formatPriceLkr(sub.plan.priceLkr)}
+            {sub.plan.id !== "free" && (
+              <>
+                {" "}
+                · renews / ends {formatDate(sub.currentPeriodEnd)}
+              </>
+            )}
+            {" · "}
+            <span className="capitalize">{sub.status.replace("_", " ")}</span>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {pastDue && sub.plan.id !== "free" && (
+            <Button size="sm" disabled={busy} onClick={onRenew}>
+              Renew now
+            </Button>
+          )}
+          {hasSchedule ? (
+            <Button variant="outline" size="sm" disabled={busy} onClick={onResume}>
+              Keep current plan
+            </Button>
+          ) : (
+            sub.plan.id !== "free" && (
+              <Button variant="outline" size="sm" disabled={busy} onClick={onCancel}>
+                Cancel at period end
+              </Button>
+            )
+          )}
+        </div>
+      </div>
+
+      {sub.changeHint && (
+        <div className="mt-4 flex items-start gap-2 rounded-lg border border-border/60 bg-background/50 px-3 py-2 text-sm text-muted-foreground">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+          <span>{sub.changeHint}</span>
+        </div>
+      )}
+
+      {sub.overLimitWarnings.length > 0 && (
+        <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+          After the switch you will be over limit (soft lock — existing data kept):{" "}
+          {sub.overLimitWarnings.join("; ")}
+        </div>
+      )}
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <UsageStat
+          label="Projects"
+          value={`${sub.usage.projectsUsed} / ${formatLimit(sub.plan.maxProjects)}`}
+          warn={
+            sub.plan.maxProjects >= 0 && sub.usage.projectsUsed >= sub.plan.maxProjects
+          }
+        />
+        <UsageStat label="Pages / project" value={formatLimit(sub.plan.maxPagesPerProject)} />
+        <UsageStat
+          label="Media uploads (month)"
+          value={`${sub.usage.mediaUploadsThisMonth} / ${formatLimit(sub.plan.maxMediaUploadsMonth)}`}
+          warn={
+            sub.plan.maxMediaUploadsMonth >= 0 &&
+            sub.usage.mediaUploadsThisMonth >= sub.plan.maxMediaUploadsMonth
+          }
+        />
+        <UsageStat
+          label="Builder components"
+          value={
+            sub.plan.allBuilderComponents
+              ? "All"
+              : `${sub.plan.builderComponents.length} included`
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+function UsageStat({
+  label,
+  value,
+  warn,
+}: {
+  label: string;
+  value: string;
+  warn?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg border px-3 py-2",
+        warn
+          ? "border-amber-500/40 bg-amber-500/10"
+          : "border-border/50 bg-background/40",
+      )}
+    >
       <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-0.5 text-sm font-semibold tabular-nums">{value}</div>
     </div>
@@ -162,16 +276,24 @@ function UsageStat({ label, value }: { label: string; value: string }) {
 
 function PlanCard({
   plan,
-  current,
+  sub,
   busy,
   onUpgrade,
+  onRenew,
+  onDowngrade,
 }: {
   plan: Plan;
-  current: boolean;
+  sub?: Subscription;
   busy: boolean;
   onUpgrade: () => void;
+  onRenew: () => void;
+  onDowngrade: () => void;
 }) {
   const featured = plan.id === "pro";
+  const current = sub?.plan.id === plan.id;
+  const kind: PlanChangeKind = sub ? classifyPlanChange(sub.plan, plan) : "upgrade";
+  const pendingThis = sub?.pendingPlan?.id === plan.id;
+
   const features = [
     `${formatLimit(plan.maxProjects)} projects`,
     `${formatLimit(plan.maxPagesPerProject)} pages per project`,
@@ -181,13 +303,40 @@ function PlanCard({
       : `${plan.builderComponents.length} builder components`,
   ];
 
+  let action: { label: string; onClick: () => void; variant?: "default" | "outline" | "secondary" } | null =
+    null;
+
+  if (current) {
+    if (sub?.status === "past_due") {
+      action = { label: "Renew now", onClick: onRenew };
+    } else if (
+      plan.priceLkr > 0 &&
+      sub?.currentPeriodEnd &&
+      new Date(sub.currentPeriodEnd).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000
+    ) {
+      action = { label: "Renew early", onClick: onRenew, variant: "outline" };
+    } else {
+      action = { label: "Current plan", onClick: () => {}, variant: "secondary" };
+    }
+  } else if (pendingThis) {
+    action = { label: "Scheduled", onClick: () => {}, variant: "secondary" };
+  } else if (kind === "upgrade") {
+    action = { label: `Upgrade to ${plan.name}`, onClick: onUpgrade };
+  } else if (kind === "downgrade") {
+    action = {
+      label: plan.priceLkr <= 0 ? "Switch to Free at period end" : `Downgrade to ${plan.name}`,
+      onClick: onDowngrade,
+      variant: "outline",
+    };
+  } else if (kind === "renew") {
+    action = { label: "Renew", onClick: onRenew };
+  }
+
   return (
     <div
       className={cn(
         "relative flex flex-col rounded-xl border p-5",
-        featured
-          ? "border-primary/50 bg-primary/5 shadow-sm"
-          : "border-border/60 bg-card/50",
+        featured ? "border-primary/50 bg-primary/5 shadow-sm" : "border-border/60 bg-card/50",
         current && "ring-2 ring-primary/40",
       )}
     >
@@ -207,18 +356,29 @@ function PlanCard({
         ))}
       </ul>
       <div className="mt-5">
-        {current ? (
-          <Button className="w-full" variant="secondary" disabled>
-            Current plan
+        {action && (
+          <Button
+            className="w-full"
+            variant={action.variant ?? "default"}
+            disabled={
+              busy ||
+              action.label === "Current plan" ||
+              action.label === "Scheduled"
+            }
+            onClick={action.onClick}
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : action.label}
           </Button>
-        ) : plan.priceLkr <= 0 ? (
-          <Button className="w-full" variant="outline" disabled>
-            Included free
-          </Button>
-        ) : (
-          <Button className="w-full" disabled={busy} onClick={onUpgrade}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : `Upgrade to ${plan.name}`}
-          </Button>
+        )}
+        {kind === "downgrade" && !current && !pendingThis && (
+          <p className="mt-2 text-center text-[11px] text-muted-foreground">
+            Takes effect at period end. No immediate charge.
+          </p>
+        )}
+        {kind === "upgrade" && !current && (
+          <p className="mt-2 text-center text-[11px] text-muted-foreground">
+            Activates immediately after payment.
+          </p>
         )}
       </div>
     </div>

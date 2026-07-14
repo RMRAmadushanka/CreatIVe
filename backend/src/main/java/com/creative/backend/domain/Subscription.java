@@ -48,6 +48,13 @@ public class Subscription {
     @Column(name = "cancel_at_period_end", nullable = false)
     private boolean cancelAtPeriodEnd;
 
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "pending_plan_id")
+    private Plan pendingPlan;
+
+    @Column(name = "grace_period_ends_at")
+    private LocalDateTime gracePeriodEndsAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -126,6 +133,22 @@ public class Subscription {
 
     public void setCancelAtPeriodEnd(boolean cancelAtPeriodEnd) {
         this.cancelAtPeriodEnd = cancelAtPeriodEnd;
+    }
+
+    public Plan getPendingPlan() {
+        return pendingPlan;
+    }
+
+    public void setPendingPlan(Plan pendingPlan) {
+        this.pendingPlan = pendingPlan;
+    }
+
+    public LocalDateTime getGracePeriodEndsAt() {
+        return gracePeriodEndsAt;
+    }
+
+    public void setGracePeriodEndsAt(LocalDateTime gracePeriodEndsAt) {
+        this.gracePeriodEndsAt = gracePeriodEndsAt;
     }
 
     public LocalDateTime getCreatedAt() {

@@ -12,12 +12,16 @@ export type Plan = {
 
 export type Subscription = {
   id: string;
-  status: string;
+  status: "active" | "past_due" | "cancelled" | "expired" | string;
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
   payhereOrderId: string | null;
   plan: Plan;
+  pendingPlan: Plan | null;
+  gracePeriodEndsAt: string | null;
+  changeHint: string | null;
+  overLimitWarnings: string[];
   usage: {
     projectsUsed: number;
     mediaUploadsThisMonth: number;
@@ -46,3 +50,5 @@ export type PayHereCheckout = {
   custom1: string;
   custom2: string;
 };
+
+export type PlanChangeKind = "upgrade" | "downgrade" | "renew" | "current";

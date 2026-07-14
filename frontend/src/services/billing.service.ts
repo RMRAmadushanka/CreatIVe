@@ -1,13 +1,20 @@
 import { authorizedFetch } from "@/lib/api-client";
 import { API_BASE_URL, API_ENDPOINTS } from "@/constants/api";
-import type { PayHereCheckout, Plan, Subscription } from "@/types/billing.types";
+import type { PayHereCheckout, Plan, PlanChangeKind, Subscription } from "@/types/billing.types";
 
 async function parseOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(
-      `Request failed (${res.status} ${res.statusText})${detail ? `: ${detail}` : ""}`,
-    );
+    let message = `Request failed (${res.status} ${res.statusText})`;
+    if (detail) {
+      try {
+        const json = JSON.parse(detail) as { message?: string; code?: string };
+        message = json.message || detail;
+      } catch {
+        message = `${message}: ${detail}`;
+      }
+    }
+    throw new Error(message);
   }
   return (await res.json()) as T;
 }
@@ -24,6 +31,7 @@ export async function getMySubscription(): Promise<Subscription> {
   return parseOrThrow<Subscription>(res);
 }
 
+/** Pay now — upgrades and renewals only. */
 export async function createCheckout(planId: string): Promise<PayHereCheckout> {
   const res = await authorizedFetch(`${API_BASE_URL}${API_ENDPOINTS.billingCheckout}`, {
     method: "POST",
@@ -34,6 +42,17 @@ export async function createCheckout(planId: string): Promise<PayHereCheckout> {
   return parseOrThrow<PayHereCheckout>(res);
 }
 
+/** Schedule downgrade / Free at period end (no payment). */
+export async function schedulePlanChange(planId: string): Promise<Subscription> {
+  const res = await authorizedFetch(`${API_BASE_URL}${API_ENDPOINTS.billingScheduleChange}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ planId }),
+    requireAuth: true,
+  });
+  return parseOrThrow<Subscription>(res);
+}
+
 export async function cancelSubscription(): Promise<Subscription> {
   const res = await authorizedFetch(`${API_BASE_URL}${API_ENDPOINTS.billingCancel}`, {
     method: "POST",
@@ -42,7 +61,21 @@ export async function cancelSubscription(): Promise<Subscription> {
   return parseOrThrow<Subscription>(res);
 }
 
-/** Submit a PayHere checkout form (browser redirect). */
+export async function resumeSubscription(): Promise<Subscription> {
+  const res = await authorizedFetch(`${API_BASE_URL}${API_ENDPOINTS.billingResume}`, {
+    method: "POST",
+    requireAuth: true,
+  });
+  return parseOrThrow<Subscription>(res);
+}
+
+export function classifyPlanChange(current: Plan, target: Plan): PlanChangeKind {
+  if (current.id === target.id) return "renew";
+  if (target.priceLkr > current.priceLkr) return "upgrade";
+  if (target.priceLkr < current.priceLkr) return "downgrade";
+  return "upgrade";
+}
+
 export function submitPayHereCheckout(payload: PayHereCheckout): void {
   const form = document.createElement("form");
   form.method = "POST";
@@ -88,4 +121,17 @@ export function formatLimit(n: number): string {
 export function formatPriceLkr(price: number): string {
   if (price <= 0) return "Free";
   return `LKR ${price.toLocaleString("en-LK")}/mo`;
+}
+
+export function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return iso;
+  }
 }

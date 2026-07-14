@@ -39,10 +39,16 @@ export async function authorizedFetch(
   }
   if (res.status === 402) {
     const detail = await res.clone().text().catch(() => "");
-    throw new ApiError(
-      detail || "Plan limit reached. Upgrade your plan to continue.",
-      402,
-    );
+    let message = "Plan limit reached. Upgrade your plan to continue.";
+    if (detail) {
+      try {
+        const json = JSON.parse(detail) as { message?: string; code?: string };
+        message = json.message || detail;
+      } catch {
+        message = detail;
+      }
+    }
+    throw new ApiError(message, 402);
   }
 
   return res;

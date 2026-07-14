@@ -3,6 +3,7 @@ package com.creative.backend.web;
 import com.creative.backend.billing.PayHereService;
 import com.creative.backend.billing.PlanLimitService;
 import com.creative.backend.billing.SubscriptionService;
+import com.creative.backend.billing.SubscriptionService.ChangeKind;
 import com.creative.backend.domain.BillingOrder;
 import com.creative.backend.domain.BillingOrderRepository;
 import com.creative.backend.domain.Plan;
@@ -14,6 +15,7 @@ import com.creative.backend.security.CurrentUserService;
 import com.creative.backend.web.dto.PayHereCheckoutDto;
 import com.creative.backend.web.dto.PlanDto;
 import com.creative.backend.web.dto.SubscriptionDto;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -68,14 +70,13 @@ public class BillingController {
     @GetMapping("/me")
     public SubscriptionDto me() {
         User user = currentUserService.requireUser();
-        Subscription sub = subscriptionService.ensureActiveSubscription(user.getId());
-        int projects = (int) projectRepository.countByOwnerId(user.getId());
-        int media = planLimitService.mediaUploadsThisMonth(user.getId());
-        String period = java.time.YearMonth.now().toString();
-        return SubscriptionDto.from(
-                sub, new SubscriptionDto.UsageDto(projects, media, period));
+        return toDto(user.getId(), subscriptionService.ensureActiveSubscription(user.getId()));
     }
 
+    /**
+     * Start PayHere checkout for <b>upgrade</b> or <b>renew</b> only.
+     * Downgrades use {@code POST /schedule-change}.
+     */
     @PostMapping("/checkout")
     public PayHereCheckoutDto checkout(@RequestBody CheckoutRequest request) {
         if (!payHereService.isConfigured()) {
@@ -89,28 +90,47 @@ public class BillingController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "planId is required");
         }
 
-        Plan plan = planRepository
+        Plan target = planRepository
                 .findById(request.planId().trim().toLowerCase())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown plan"));
 
-        if (!plan.isActive() || plan.getPriceLkr() <= 0) {
+        if (!target.isActive() || target.getPriceLkr() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Selected plan is not purchasable");
         }
 
         Subscription current = subscriptionService.ensureActiveSubscription(user.getId());
-        if (plan.getId().equals(current.getPlan().getId()) && "active".equals(current.getStatus())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You are already on this plan");
+        ChangeKind kind = subscriptionService.classifyChange(current.getPlan(), target);
+
+        if (kind == ChangeKind.DOWNGRADE) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Downgrades take effect at period end. Use schedule-change instead of checkout.");
+        }
+
+        if (kind == ChangeKind.RENEW
+                && "active".equals(current.getStatus())
+                && current.getCurrentPeriodEnd() != null
+                && current.getCurrentPeriodEnd().isAfter(LocalDateTime.now().plusDays(7))
+                && !current.isCancelAtPeriodEnd()
+                && !"past_due".equals(current.getStatus())) {
+            // Allow early renew only when within 7 days of expiry, cancelled, or past_due
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "You can renew when your period ends within 7 days, or if payment is past due.");
         }
 
         String orderId = "PH-" + UUID.randomUUID().toString().replace("-", "").substring(0, 18).toUpperCase();
-        String amount = String.format("%.2f", (double) plan.getPriceLkr());
+        String amount = String.format("%.2f", (double) target.getPriceLkr());
         String currency = "LKR";
+        String itemLabel = kind == ChangeKind.RENEW
+                ? "CreatIVe " + target.getName() + " — Monthly renewal"
+                : "CreatIVe " + target.getName() + " — Upgrade";
 
         BillingOrder order = new BillingOrder();
         order.setOrderId(orderId);
         order.setUserId(user.getId());
-        order.setPlanId(plan.getId());
-        order.setAmountLkr(plan.getPriceLkr());
+        order.setPlanId(target.getId());
+        order.setAmountLkr(target.getPriceLkr());
         order.setStatus("pending");
         billingOrderRepository.save(order);
 
@@ -119,7 +139,7 @@ public class BillingController {
                 payHereService.getCheckoutUrl(),
                 payHereService.getMerchantId(),
                 orderId,
-                "CreatIVe " + plan.getName() + " — Monthly",
+                itemLabel,
                 currency,
                 amount,
                 payHereService.checkoutHash(orderId, amount, currency),
@@ -134,7 +154,18 @@ public class BillingController {
                 payHereService.getCancelUrl(),
                 payHereService.getNotifyUrl(),
                 user.getId(),
-                plan.getId());
+                target.getId());
+    }
+
+    /** Schedule a downgrade (or Free) for the end of the current billing period. */
+    @PostMapping("/schedule-change")
+    public SubscriptionDto scheduleChange(@RequestBody CheckoutRequest request) {
+        User user = currentUserService.requireUser();
+        if (request.planId() == null || request.planId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "planId is required");
+        }
+        Subscription sub = subscriptionService.scheduleDowngrade(user.getId(), request.planId().trim().toLowerCase());
+        return toDto(user.getId(), sub);
     }
 
     @PostMapping("/payhere/notify")
@@ -154,26 +185,32 @@ public class BillingController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("invalid signature");
         }
 
-        BillingOrder order = billingOrderRepository
-                .findByOrderId(orderId)
-                .orElse(null);
+        BillingOrder order = billingOrderRepository.findByOrderId(orderId).orElse(null);
         if (order == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body("order not found");
         }
 
+        // Idempotent success path
+        if ("paid".equals(order.getStatus())) {
+            return ResponseEntity.ok("OK");
+        }
+
         if ("2".equals(statusCode)) {
-            if (!"paid".equals(order.getStatus())) {
-                order.setStatus("paid");
-                order.setPaidAt(LocalDateTime.now());
-                billingOrderRepository.save(order);
-                subscriptionService.activatePaidPlan(order.getUserId(), order.getPlanId(), orderId);
+            if (!amountMatches(order.getAmountLkr(), amount)) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("amount mismatch");
             }
+            order.setStatus("paid");
+            order.setPaidAt(LocalDateTime.now());
+            billingOrderRepository.save(order);
+            subscriptionService.activatePaidPlan(order.getUserId(), order.getPlanId(), orderId);
             return ResponseEntity.ok("OK");
         }
 
         if ("0".equals(statusCode) || "-1".equals(statusCode) || "-2".equals(statusCode)) {
-            order.setStatus("failed");
-            billingOrderRepository.save(order);
+            if (!"paid".equals(order.getStatus())) {
+                order.setStatus("failed");
+                billingOrderRepository.save(order);
+            }
         }
         return ResponseEntity.ok("OK");
     }
@@ -181,11 +218,62 @@ public class BillingController {
     @PostMapping("/cancel")
     public SubscriptionDto cancel() {
         User user = currentUserService.requireUser();
-        Subscription sub = subscriptionService.cancelAtPeriodEnd(user.getId());
-        int projects = (int) projectRepository.countByOwnerId(user.getId());
-        int media = planLimitService.mediaUploadsThisMonth(user.getId());
+        return toDto(user.getId(), subscriptionService.cancelAtPeriodEnd(user.getId()));
+    }
+
+    @PostMapping("/resume")
+    public SubscriptionDto resume() {
+        User user = currentUserService.requireUser();
+        return toDto(user.getId(), subscriptionService.resume(user.getId()));
+    }
+
+    private SubscriptionDto toDto(String userId, Subscription sub) {
+        int projects = (int) projectRepository.countByOwnerId(userId);
+        int media = planLimitService.mediaUploadsThisMonth(userId);
+        String period = java.time.YearMonth.now().toString();
+        List<String> warnings = List.of();
+        if (sub.getPendingPlan() != null) {
+            warnings = subscriptionService.overLimitReasons(userId, sub.getPendingPlan());
+        }
+        String hint = buildHint(sub);
         return SubscriptionDto.from(
-                sub, new SubscriptionDto.UsageDto(projects, media, java.time.YearMonth.now().toString()));
+                sub,
+                new SubscriptionDto.UsageDto(projects, media, period),
+                hint,
+                warnings);
+    }
+
+    private static String buildHint(Subscription sub) {
+        if ("past_due".equals(sub.getStatus()) && sub.getGracePeriodEndsAt() != null) {
+            return "Payment past due — renew before "
+                    + sub.getGracePeriodEndsAt()
+                    + " to keep "
+                    + sub.getPlan().getName()
+                    + " benefits.";
+        }
+        if (sub.getPendingPlan() != null) {
+            return "Scheduled to switch to "
+                    + sub.getPendingPlan().getName()
+                    + " on "
+                    + sub.getCurrentPeriodEnd()
+                    + ". You keep "
+                    + sub.getPlan().getName()
+                    + " until then.";
+        }
+        if (sub.isCancelAtPeriodEnd()) {
+            return "Cancels at period end (" + sub.getCurrentPeriodEnd() + ").";
+        }
+        return null;
+    }
+
+    private static boolean amountMatches(int expectedLkr, String payhereAmount) {
+        try {
+            BigDecimal paid = new BigDecimal(payhereAmount.trim());
+            BigDecimal expected = BigDecimal.valueOf(expectedLkr).setScale(2);
+            return paid.compareTo(expected) == 0 || paid.compareTo(BigDecimal.valueOf(expectedLkr)) == 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static String[] splitName(String name) {

@@ -11,10 +11,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.stream.Collectors;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class PlanLimitService {
@@ -48,12 +46,13 @@ public class PlanLimitService {
         Plan plan = currentPlan(userId);
         long count = projectRepository.countByOwnerId(userId);
         if (plan.getMaxProjects() >= 0 && count >= plan.getMaxProjects()) {
-            throw limit(
-                    "Project limit reached for the "
+            throw new PlanLimitException(
+                    PlanLimitException.PROJECT_LIMIT,
+                    "Project limit reached on the "
                             + plan.getName()
                             + " plan ("
                             + plan.getMaxProjects()
-                            + "). Upgrade to create more projects.");
+                            + "). Existing projects are kept — upgrade to create more.");
         }
     }
 
@@ -63,12 +62,13 @@ public class PlanLimitService {
         }
         Plan plan = currentPlan(userId);
         if (plan.getMaxPagesPerProject() >= 0 && currentPageCount >= plan.getMaxPagesPerProject()) {
-            throw limit(
-                    "Page limit reached for the "
+            throw new PlanLimitException(
+                    PlanLimitException.PAGE_LIMIT,
+                    "Page limit reached on the "
                             + plan.getName()
                             + " plan ("
                             + plan.getMaxPagesPerProject()
-                            + " pages per project). Upgrade to add more pages.");
+                            + " per project). Existing pages are kept — upgrade to add more.");
         }
     }
 
@@ -78,12 +78,13 @@ public class PlanLimitService {
         }
         Plan plan = currentPlan(userId);
         if (plan.getMaxPagesPerProject() >= 0 && nextPageCount > plan.getMaxPagesPerProject()) {
-            throw limit(
-                    "Page limit reached for the "
+            throw new PlanLimitException(
+                    PlanLimitException.PAGE_LIMIT,
+                    "Page limit reached on the "
                             + plan.getName()
                             + " plan ("
                             + plan.getMaxPagesPerProject()
-                            + " pages per project). Upgrade to keep more pages.");
+                            + " per project). Remove pages or upgrade to continue.");
         }
     }
 
@@ -99,12 +100,13 @@ public class PlanLimitService {
         }
         UsageCounter counter = getOrCreateCounter(userId);
         if (counter.getMediaUploads() >= max) {
-            throw limit(
-                    "Monthly media upload limit reached for the "
+            throw new PlanLimitException(
+                    PlanLimitException.MEDIA_LIMIT,
+                    "Monthly media upload limit reached on the "
                             + plan.getName()
                             + " plan ("
                             + max
-                            + "). Upgrade or wait until next month.");
+                            + "). Existing media is kept — upgrade or wait until next month.");
         }
     }
 
@@ -156,9 +158,5 @@ public class PlanLimitService {
 
     private static String currentPeriod() {
         return YearMonth.from(LocalDate.now()).format(PERIOD);
-    }
-
-    private static ResponseStatusException limit(String message) {
-        return new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED, message);
     }
 }
