@@ -26,39 +26,34 @@ export function AppHeader() {
   return <AppWorkspaceHeader />;
 }
 
-/** Public product navbar — no builder/dashboard links. */
 function MarketingHeader() {
   return (
     <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-6">
-        <Link
-          to="/auth"
-          search={{ redirect: undefined }}
-          className="text-sm font-semibold tracking-tight"
-        >
+        <Link to="/" search={homeSearch} className="text-sm font-semibold tracking-tight">
           {APP_NAME}
         </Link>
 
         <nav className="hidden items-center gap-6 text-sm text-muted-foreground sm:flex">
-          <a href="#features" className="transition-colors hover:text-foreground">
+          <a href="/#features" className="transition-colors hover:text-foreground">
             Features
           </a>
-          <a href="#pricing" className="transition-colors hover:text-foreground">
+          <a href="/#pricing" className="transition-colors hover:text-foreground">
             Pricing
           </a>
-          <a href="#how-it-works" className="transition-colors hover:text-foreground">
+          <a href="/#how-it-works" className="transition-colors hover:text-foreground">
             How it works
           </a>
         </nav>
 
         <div className="flex items-center gap-2">
           <Button asChild variant="ghost" size="sm">
-            <Link to="/auth" search={{ redirect: undefined }}>
+            <Link to="/auth" search={{ redirect: undefined, plan: undefined, mode: "signin" }}>
               Sign in
             </Link>
           </Button>
           <Button asChild size="sm">
-            <Link to="/auth" search={{ redirect: undefined }}>
+            <Link to="/auth" search={{ redirect: undefined, plan: undefined, mode: "signup" }}>
               Get started
             </Link>
           </Button>
@@ -68,7 +63,6 @@ function MarketingHeader() {
   );
 }
 
-/** Authenticated workspace navbar. */
 function AppWorkspaceHeader() {
   return (
     <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur">

@@ -54,7 +54,10 @@ function DashboardLayout() {
 
   useEffect(() => {
     if (authReady && !user) {
-      void navigate({ to: "/auth", search: { redirect: window.location.href } });
+      void navigate({
+        to: "/auth",
+        search: { redirect: window.location.href, plan: undefined, mode: "signin" },
+      });
     }
   }, [authReady, user, navigate]);
 

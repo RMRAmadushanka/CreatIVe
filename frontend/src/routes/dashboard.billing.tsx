@@ -1,6 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { AlertTriangle, Check, CreditCard, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,31 +17,44 @@ import {
   submitPayHereCheckout,
 } from "@/services/billing.service";
 import type { Plan, PlanChangeKind, Subscription } from "@/types/billing.types";
+import { clearPendingPlan, getPendingPlan, isPaidPlanId } from "@/lib/pending-plan";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-type BillingSearch = { status?: "success" | "cancel" | string };
+type BillingSearch = {
+  status?: "success" | "cancel" | string;
+  checkout?: string;
+};
 
 export const Route = createFileRoute("/dashboard/billing")({
   validateSearch: (search: Record<string, unknown>): BillingSearch => ({
     status: typeof search.status === "string" ? search.status : undefined,
+    checkout:
+      typeof search.checkout === "string" &&
+      ["pro", "business"].includes(search.checkout.toLowerCase())
+        ? search.checkout.toLowerCase()
+        : undefined,
   }),
   component: BillingPage,
 });
 
 function BillingPage() {
-  const { status } = Route.useSearch();
+  const { status, checkout } = Route.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const autoCheckoutStarted = useRef(false);
 
   const plansQuery = useQuery({ queryKey: ["billing", "plans"], queryFn: listPlans });
   const subQuery = useQuery({ queryKey: ["billing", "me"], queryFn: getMySubscription });
 
   useEffect(() => {
     if (status === "success") {
+      clearPendingPlan();
       toast.success("Payment received — refreshing your plan…");
       void queryClient.invalidateQueries({ queryKey: ["billing", "me"] });
       void navigate({ to: "/dashboard/billing", search: {}, replace: true });
     } else if (status === "cancel") {
-      toast.message("Checkout cancelled");
+      toast.message("Checkout cancelled — you can retry anytime from Billing");
       void navigate({ to: "/dashboard/billing", search: {}, replace: true });
     }
   }, [status, queryClient, navigate]);
@@ -51,11 +62,28 @@ function BillingPage() {
   const checkoutMutation = useMutation({
     mutationFn: (planId: string) => createCheckout(planId),
     onSuccess: (payload) => {
+      clearPendingPlan();
       toast.message("Redirecting to PayHere…");
       submitPayHereCheckout(payload);
     },
     onError: (err: Error) => toast.error(err.message),
   });
+
+  // After signup with a paid plan selected on the home page, start checkout once.
+  useEffect(() => {
+    const planId = checkout ?? (isPaidPlanId(getPendingPlan()) ? getPendingPlan() : null);
+    if (!planId || !subQuery.isSuccess || autoCheckoutStarted.current) return;
+    if (subQuery.data?.plan.id === planId && subQuery.data.status === "active") {
+      clearPendingPlan();
+      void navigate({ to: "/dashboard/billing", search: {}, replace: true });
+      return;
+    }
+    autoCheckoutStarted.current = true;
+    toast.message(`Continuing with ${planId} plan…`);
+    checkoutMutation.mutate(planId);
+    void navigate({ to: "/dashboard/billing", search: {}, replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkout, subQuery.isSuccess, subQuery.data?.plan.id, subQuery.data?.status]);
 
   const scheduleMutation = useMutation({
     mutationFn: (planId: string) => schedulePlanChange(planId),

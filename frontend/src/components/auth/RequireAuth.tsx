@@ -31,6 +31,8 @@ export function RequireAuth({
             : typeof window !== "undefined"
               ? window.location.href
               : undefined,
+        plan: undefined,
+        mode: "signin",
       },
       replace: true,
     });

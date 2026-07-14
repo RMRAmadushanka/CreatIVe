@@ -4,16 +4,19 @@ import { AuthPage } from "@/features/auth";
 export const Route = createFileRoute("/auth")({
   validateSearch: (s: Record<string, unknown>) => ({
     redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+    plan:
+      typeof s.plan === "string" && ["free", "pro", "business"].includes(s.plan.toLowerCase())
+        ? s.plan.toLowerCase()
+        : undefined,
+    mode: s.mode === "signup" || s.mode === "signin" ? s.mode : undefined,
   }),
   head: () => ({
     meta: [
-      { title: "Sign in — CMS" },
+      { title: "Sign in — CreatIVe" },
       {
         name: "description",
-        content: "Sign in or create an account to access the multi-tenant CMS dashboard.",
+        content: "Sign in or create an account to access CreatIVe.",
       },
-      { property: "og:title", content: "Sign in — CMS" },
-      { property: "og:description", content: "Access your multi-tenant CMS workspace." },
     ],
   }),
   component: AuthPage,

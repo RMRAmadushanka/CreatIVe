@@ -63,7 +63,7 @@ export async function requireAuth(options?: { returnTo?: string }): Promise<Auth
       returnTo && !returnTo.includes("/auth") ? returnTo : undefined;
     throw redirect({
       to: "/auth",
-      search: { redirect: safeReturn },
+      search: { redirect: safeReturn, plan: undefined, mode: "signin" },
     });
   }
   return user;
