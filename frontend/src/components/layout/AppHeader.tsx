@@ -1,5 +1,5 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { CreditCard, LayoutTemplate, Images, LayoutDashboard, LogOut, User as UserIcon, ChevronDown } from "lucide-react";
+import { CreditCard, Images, LayoutDashboard, LogOut, User as UserIcon, ChevronDown } from "lucide-react";
 import { authStore, useAuth, useAuthReady, type AuthUser } from "@/store/auth-store";
 import { Button } from "@/components/ui/button";
 import {
@@ -78,7 +78,6 @@ function AppWorkspaceHeader({ user }: { user: AuthUser }) {
   const navigate = useNavigate();
 
   const navItems = [
-    { to: "/" as const, label: "Builder", icon: LayoutTemplate, match: (p: string) => p === "/" },
     {
       to: "/media-library" as const,
       label: "Media",
@@ -125,7 +124,6 @@ function AppWorkspaceHeader({ user }: { user: AuthUser }) {
                 <Link
                   key={item.to}
                   to={item.to}
-                  search={item.to === "/" ? homeSearch : undefined}
                   className={cn(
                     "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
                     active
@@ -181,12 +179,6 @@ function AppWorkspaceHeader({ user }: { user: AuthUser }) {
                 <Link to="/dashboard/billing">
                   <CreditCard className="h-4 w-4" />
                   Billing
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild className="md:hidden">
-                <Link to="/" search={homeSearch}>
-                  <LayoutTemplate className="h-4 w-4" />
-                  Builder
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild className="md:hidden">
