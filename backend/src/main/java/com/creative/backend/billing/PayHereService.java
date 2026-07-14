@@ -3,24 +3,32 @@ package com.creative.backend.billing;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
-import java.util.Map;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
+import java.util.Locale;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+/**
+ * PayHere Checkout API helper (https://support.payhere.lk/api-&-mobile-sdk/checkout-api).
+ *
+ * <p>Request hash and notification (md5sig) signatures follow the official formula:
+ *
+ * <pre>
+ * hash   = UPPER(MD5(merchant_id + order_id + amount + currency + UPPER(MD5(merchant_secret))))
+ * md5sig = UPPER(MD5(merchant_id + order_id + payhere_amount + payhere_currency + status_code
+ *                    + UPPER(MD5(merchant_secret))))
+ * </pre>
+ *
+ * <p>The {@code amount} used in the request hash MUST be formatted with exactly two decimal places
+ * using {@code '.'} as the decimal separator (e.g. {@code 2990.00}), independent of the server's
+ * default locale.
+ */
 @Component
 public class PayHereService {
 
-    public enum SecretFormat {
-        AUTO,
-        RAW,
-        BASE64
-    }
-
     private final String merchantId;
     private final String merchantSecret;
-    private final String rawMerchantSecret;
-    private final SecretFormat secretFormat;
     private final String mode;
     private final String notifyUrl;
     private final String returnUrl;
@@ -29,94 +37,24 @@ public class PayHereService {
     public PayHereService(
             @Value("${payhere.merchant-id:}") String merchantId,
             @Value("${payhere.merchant-secret:}") String merchantSecret,
-            @Value("${payhere.merchant-secret-format:auto}") String secretFormat,
             @Value("${payhere.mode:sandbox}") String mode,
             @Value("${payhere.notify-url:}") String notifyUrl,
             @Value("${payhere.return-url:}") String returnUrl,
             @Value("${payhere.cancel-url:}") String cancelUrl) {
-        this.merchantId = trim(merchantId);
-        this.secretFormat = parseSecretFormat(secretFormat);
-        this.rawMerchantSecret = trim(merchantSecret);
-        this.merchantSecret = resolveMerchantSecret(this.rawMerchantSecret, this.secretFormat);
-        this.mode = mode == null || mode.isBlank() ? "sandbox" : mode.trim().toLowerCase();
-        this.notifyUrl = trim(notifyUrl);
-        this.returnUrl = trim(returnUrl);
-        this.cancelUrl = trim(cancelUrl);
-    }
-
-    static SecretFormat parseSecretFormat(String raw) {
-        if (raw == null || raw.isBlank()) {
-            // RAW by default: PayHere secrets themselves look Base64 (end with ==) and
-            // must be used verbatim. Only decode when explicitly told to.
-            return SecretFormat.RAW;
-        }
-        return switch (raw.trim().toLowerCase()) {
-            case "base64", "b64" -> SecretFormat.BASE64;
-            case "auto" -> SecretFormat.AUTO;
-            default -> SecretFormat.RAW;
-        };
-    }
-
-    /**
-     * PayHere Merchant Secrets are long numeric strings in the portal. Some env files
-     * accidentally store them Base64-encoded — auto mode unwraps that when detected.
-     */
-    static String resolveMerchantSecret(String raw, SecretFormat format) {
-        if (raw == null || raw.isBlank()) {
-            return "";
-        }
-        return switch (format) {
-            case RAW -> raw;
-            case BASE64 -> decodeBase64Secret(raw).orElse(raw);
-            case AUTO -> {
-                String decoded = tryDecodeBase64Secret(raw).orElse(null);
-                if (decoded != null && !decoded.equals(raw) && looksLikePayHereSecret(decoded)) {
-                    yield decoded;
-                }
-                yield raw;
-            }
-        };
-    }
-
-    private static boolean looksLikePayHereSecret(String value) {
-        if (value == null || value.length() < 16) {
-            return false;
-        }
-        return value.matches("^[0-9]+$") || value.matches("^[A-Za-z0-9]+$");
-    }
-
-    private static java.util.Optional<String> tryDecodeBase64Secret(String raw) {
-        if (!raw.matches("^[A-Za-z0-9+/]+={0,2}$") || raw.length() % 4 != 0) {
-            return java.util.Optional.empty();
-        }
-        return decodeBase64Secret(raw);
-    }
-
-    private static java.util.Optional<String> decodeBase64Secret(String raw) {
-        try {
-            String decoded = new String(Base64.getDecoder().decode(raw), StandardCharsets.UTF_8).trim();
-            if (decoded.isBlank()) {
-                return java.util.Optional.empty();
-            }
-            return java.util.Optional.of(decoded);
-        } catch (IllegalArgumentException e) {
-            return java.util.Optional.empty();
-        }
-    }
-
-    private static String trim(String raw) {
-        if (raw == null) {
-            return "";
-        }
-        String s = raw.trim();
-        if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
-            s = s.substring(1, s.length() - 1).trim();
-        }
-        return s;
+        this.merchantId = merchantId == null ? "" : merchantId.trim();
+        this.merchantSecret = merchantSecret == null ? "" : merchantSecret.trim();
+        this.mode = mode == null || mode.isBlank() ? "sandbox" : mode.trim().toLowerCase(Locale.ROOT);
+        this.notifyUrl = notifyUrl == null ? "" : notifyUrl.trim();
+        this.returnUrl = returnUrl == null ? "" : returnUrl.trim();
+        this.cancelUrl = cancelUrl == null ? "" : cancelUrl.trim();
     }
 
     public boolean isConfigured() {
         return !merchantId.isBlank() && !merchantSecret.isBlank() && !notifyUrl.isBlank();
+    }
+
+    public boolean isSandbox() {
+        return "sandbox".equals(mode);
     }
 
     public String getMerchantId() {
@@ -136,62 +74,48 @@ public class PayHereService {
     }
 
     public String getCheckoutUrl() {
-        return "sandbox".equals(mode)
+        return isSandbox()
                 ? "https://sandbox.payhere.lk/pay/checkout"
                 : "https://www.payhere.lk/pay/checkout";
     }
 
-    public boolean isSandbox() {
-        return "sandbox".equals(mode);
-    }
-
-    public Map<String, Object> statusSummary() {
-        boolean secretChanged = !merchantSecret.equals(rawMerchantSecret);
-
-        Map<String, Object> summary = new java.util.LinkedHashMap<>();
-        summary.put("configured", isConfigured());
-        summary.put("mode", mode);
-        summary.put("merchantId", merchantId);
-        summary.put("secretFormat", secretFormat.name().toLowerCase());
-        summary.put("secretChangedFromEnv", secretChanged);
-        summary.put("secretLength", merchantSecret.length());
-        summary.put("secretMd5Upper", merchantSecret.isBlank() ? "" : md5(merchantSecret).toUpperCase());
-        summary.put("checkoutUrl", getCheckoutUrl());
-        summary.put("notifyUrl", notifyUrl);
-        summary.put("returnUrl", returnUrl);
-        summary.put("cancelUrl", cancelUrl);
-        // Sample hash for a known input so we can compare against a local computation.
-        summary.put("sampleOrderId", "SAMPLE123");
-        summary.put("sampleHashLkr2990", checkoutHash("SAMPLE123", "2990.00", "LKR"));
-        summary.put(
-                "hint",
-                "Ensure PAYHERE_MERCHANT_SECRET matches the secret for your paying domain in PayHere Integrations, used verbatim (raw).");
-        return summary;
-    }
-
-    private static String maskTail(String value, int visible) {
-        if (value.length() <= visible) {
-            return value;
-        }
-        return "*".repeat(Math.max(0, value.length() - visible)) + value.substring(value.length() - visible);
+    /**
+     * Formats an amount with exactly two decimal places and a {@code '.'} decimal separator,
+     * as required by the PayHere request hash and the {@code amount} field.
+     */
+    public String formatAmount(double amount) {
+        DecimalFormat df = new DecimalFormat("0.00", DecimalFormatSymbols.getInstance(Locale.US));
+        df.setGroupingUsed(false);
+        return df.format(amount);
     }
 
     /**
-     * PayHere formula: UPPERCASE(MD5(merchant_id + order_id + amount + currency +
-     * UPPERCASE(MD5(merchant_secret))))
+     * Generates the checkout request hash. The {@code amount} is formatted internally to guarantee
+     * it matches the value sent to PayHere.
      */
-    public String checkoutHash(String orderId, String amount, String currency) {
-        String inner = md5(merchantSecret).toUpperCase();
-        return md5(merchantId + orderId + amount + currency + inner).toUpperCase();
+    public String checkoutHash(String orderId, double amount, String currency) {
+        return checkoutHashPreformatted(orderId, formatAmount(amount), currency);
     }
 
+    /** Variant for callers that already hold a formatted amount string. */
+    public String checkoutHashPreformatted(String orderId, String formattedAmount, String currency) {
+        String innerSecret = md5(merchantSecret).toUpperCase(Locale.ROOT);
+        String raw = merchantId + orderId + formattedAmount + currency + innerSecret;
+        return md5(raw).toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * Verifies the {@code md5sig} sent to the notify URL. Uses the raw {@code payhere_amount} and
+     * {@code payhere_currency} strings exactly as received (do not reformat them).
+     */
     public boolean verifyNotifyHash(
             String orderId, String amount, String currency, String statusCode, String md5sig) {
         if (md5sig == null || md5sig.isBlank()) {
             return false;
         }
-        String inner = md5(merchantSecret).toUpperCase();
-        String local = md5(merchantId + orderId + amount + currency + statusCode + inner).toUpperCase();
+        String innerSecret = md5(merchantSecret).toUpperCase(Locale.ROOT);
+        String raw = merchantId + orderId + amount + currency + statusCode + innerSecret;
+        String local = md5(raw).toUpperCase(Locale.ROOT);
         return local.equalsIgnoreCase(md5sig.trim());
     }
 

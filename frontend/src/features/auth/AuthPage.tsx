@@ -50,7 +50,7 @@ async function startPaidPlanCheckout(planId: string): Promise<"payhere" | "billi
     toast.message(`Opening PayHere for ${planId}…`);
     const payload = await createCheckout(planId);
     clearPendingPlan();
-    await submitPayHereCheckout(payload);
+    submitPayHereCheckout(payload);
     return "payhere";
   } catch (err) {
     toast.error(err instanceof Error ? err.message : "Could not start payment");

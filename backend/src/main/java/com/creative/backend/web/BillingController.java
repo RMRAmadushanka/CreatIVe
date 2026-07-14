@@ -18,16 +18,16 @@ import com.creative.backend.web.dto.SubscriptionDto;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -36,6 +36,8 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/api/billing")
 public class BillingController {
+
+    private static final Logger log = LoggerFactory.getLogger(BillingController.class);
 
     private final PlanRepository planRepository;
     private final SubscriptionService subscriptionService;
@@ -69,12 +71,6 @@ public class BillingController {
                 .toList();
     }
 
-    /** Public health check for PayHere env wiring (no secrets exposed). */
-    @GetMapping("/payhere/status")
-    public Map<String, Object> payhereStatus() {
-        return payHereService.statusSummary();
-    }
-
     @GetMapping("/me")
     public SubscriptionDto me() {
         User user = currentUserService.requireUser();
@@ -86,9 +82,7 @@ public class BillingController {
      * Downgrades use {@code POST /schedule-change}.
      */
     @PostMapping("/checkout")
-    public PayHereCheckoutDto checkout(
-            @RequestBody CheckoutRequest request,
-            @RequestHeader(value = "Origin", required = false) String originHeader) {
+    public PayHereCheckoutDto checkout(@RequestBody CheckoutRequest request) {
         if (!payHereService.isConfigured()) {
             throw new ResponseStatusException(
                     HttpStatus.SERVICE_UNAVAILABLE,
@@ -129,23 +123,12 @@ public class BillingController {
                     "You can renew when your period ends within 7 days, or if payment is past due.");
         }
 
-        String frontendOrigin = resolveFrontendOrigin(request.frontendOrigin(), originHeader);
-        String returnUrl = resolveBillingReturnUrl(frontendOrigin, "success", payHereService.getReturnUrl());
-        String cancelUrl = resolveBillingReturnUrl(frontendOrigin, "cancel", payHereService.getCancelUrl());
-        if (returnUrl.isBlank() || cancelUrl.isBlank()) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "Set PAYHERE_RETURN_URL and PAYHERE_CANCEL_URL to your frontend billing page, "
-                            + "or call checkout from the browser so Origin can be used.");
-        }
-
-        // PayHere requires US-style decimals in both amount + hash (never locale commas).
-        String orderId = "PH" + UUID.randomUUID().toString().replace("-", "").substring(0, 18).toUpperCase();
-        String amount = String.format(Locale.US, "%.2f", (double) target.getPriceLkr());
+        String orderId = "PH-" + UUID.randomUUID().toString().replace("-", "").substring(0, 18).toUpperCase();
         String currency = "LKR";
+        String amount = payHereService.formatAmount(target.getPriceLkr());
         String itemLabel = kind == ChangeKind.RENEW
-                ? "CreatIVe " + target.getName() + " Monthly renewal"
-                : "CreatIVe " + target.getName() + " Upgrade";
+                ? "CreatIVe " + target.getName() + " — Monthly renewal"
+                : "CreatIVe " + target.getName() + " — Upgrade";
 
         BillingOrder order = new BillingOrder();
         order.setOrderId(orderId);
@@ -156,25 +139,23 @@ public class BillingController {
         billingOrderRepository.save(order);
 
         String[] nameParts = splitName(user.getName());
-        String hash = payHereService.checkoutHash(orderId, amount, currency);
         return new PayHereCheckoutDto(
                 payHereService.getCheckoutUrl(),
-                payHereService.isSandbox(),
                 payHereService.getMerchantId(),
                 orderId,
                 itemLabel,
                 currency,
                 amount,
-                hash,
+                payHereService.checkoutHashPreformatted(orderId, amount, currency),
                 nameParts[0],
                 nameParts[1],
                 user.getEmail(),
-                "0771234567",
-                "No. 1, Galle Road",
+                "0770000000",
+                "Colombo",
                 "Colombo",
                 "Sri Lanka",
-                returnUrl,
-                cancelUrl,
+                payHereService.getReturnUrl(),
+                payHereService.getCancelUrl(),
                 payHereService.getNotifyUrl(),
                 user.getId(),
                 target.getId());
@@ -191,49 +172,78 @@ public class BillingController {
         return toDto(user.getId(), sub);
     }
 
+    /**
+     * PayHere server-to-server payment notification (notify_url).
+     *
+     * <p>PayHere always POSTs as {@code application/x-www-form-urlencoded}. We must verify
+     * {@code md5sig} before trusting anything. Status codes: {@code 2}=success, {@code 0}=pending,
+     * {@code -1}=canceled, {@code -2}=failed, {@code -3}=chargeback. Always respond {@code 200 OK}
+     * once a valid, known order has been processed so PayHere stops retrying.
+     */
     @PostMapping("/payhere/notify")
     public ResponseEntity<String> payhereNotify(@RequestParam MultiValueMap<String, String> form) {
         Map<String, String> params = form.toSingleValueMap();
         String merchantId = params.getOrDefault("merchant_id", "");
         String orderId = params.getOrDefault("order_id", "");
+        String paymentId = params.getOrDefault("payment_id", "");
         String amount = params.getOrDefault("payhere_amount", params.getOrDefault("amount", ""));
         String currency = params.getOrDefault("payhere_currency", params.getOrDefault("currency", "LKR"));
         String statusCode = params.getOrDefault("status_code", "");
         String md5sig = params.getOrDefault("md5sig", "");
 
+        log.info(
+                "PayHere notify received: order_id={} payment_id={} status_code={} amount={} {}",
+                orderId,
+                paymentId,
+                statusCode,
+                amount,
+                currency);
+
         if (!merchantId.equals(payHereService.getMerchantId())) {
+            log.warn("PayHere notify rejected: merchant mismatch for order_id={}", orderId);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("invalid merchant");
         }
         if (!payHereService.verifyNotifyHash(orderId, amount, currency, statusCode, md5sig)) {
+            log.warn("PayHere notify rejected: invalid md5sig for order_id={}", orderId);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("invalid signature");
         }
 
         BillingOrder order = billingOrderRepository.findByOrderId(orderId).orElse(null);
         if (order == null) {
+            log.warn("PayHere notify: unknown order_id={}", orderId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body("order not found");
         }
 
-        // Idempotent success path
+        // Idempotent success path — PayHere may deliver the same notification more than once.
         if ("paid".equals(order.getStatus())) {
             return ResponseEntity.ok("OK");
         }
 
-        if ("2".equals(statusCode)) {
-            if (!amountMatches(order.getAmountLkr(), amount)) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("amount mismatch");
-            }
-            order.setStatus("paid");
-            order.setPaidAt(LocalDateTime.now());
-            billingOrderRepository.save(order);
-            subscriptionService.activatePaidPlan(order.getUserId(), order.getPlanId(), orderId);
-            return ResponseEntity.ok("OK");
-        }
-
-        if ("0".equals(statusCode) || "-1".equals(statusCode) || "-2".equals(statusCode)) {
-            if (!"paid".equals(order.getStatus())) {
-                order.setStatus("failed");
+        switch (statusCode) {
+            case "2" -> {
+                if (!amountMatches(order.getAmountLkr(), amount)) {
+                    log.warn(
+                            "PayHere notify: amount mismatch for order_id={} expected={} got={}",
+                            orderId,
+                            order.getAmountLkr(),
+                            amount);
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("amount mismatch");
+                }
+                order.setStatus("paid");
+                order.setPaidAt(LocalDateTime.now());
                 billingOrderRepository.save(order);
+                subscriptionService.activatePaidPlan(order.getUserId(), order.getPlanId(), orderId);
+                log.info("PayHere payment confirmed: order_id={} plan={}", orderId, order.getPlanId());
             }
+            case "0" -> log.info("PayHere payment pending: order_id={}", orderId);
+            case "-1", "-2", "-3" -> {
+                // canceled / failed / chargeback — do not activate; leave subscription untouched.
+                order.setStatus("-3".equals(statusCode) ? "chargeback" : "failed");
+                billingOrderRepository.save(order);
+                log.info("PayHere payment not completed: order_id={} status_code={}", orderId, statusCode);
+            }
+            default -> log.warn(
+                    "PayHere notify: unhandled status_code={} for order_id={}", statusCode, orderId);
         }
         return ResponseEntity.ok("OK");
     }
@@ -308,36 +318,5 @@ public class BillingController {
         return parts;
     }
 
-    private static String resolveFrontendOrigin(String bodyOrigin, String headerOrigin) {
-        String candidate = bodyOrigin != null && !bodyOrigin.isBlank() ? bodyOrigin : headerOrigin;
-        if (candidate == null || candidate.isBlank()) {
-            return "";
-        }
-        try {
-            java.net.URI uri = java.net.URI.create(candidate.trim());
-            if (uri.getScheme() == null || uri.getHost() == null) {
-                return "";
-            }
-            StringBuilder origin = new StringBuilder();
-            origin.append(uri.getScheme()).append("://").append(uri.getHost());
-            if (uri.getPort() > 0
-                    && !(uri.getPort() == 80 && "http".equalsIgnoreCase(uri.getScheme()))
-                    && !(uri.getPort() == 443 && "https".equalsIgnoreCase(uri.getScheme()))) {
-                origin.append(":").append(uri.getPort());
-            }
-            return origin.toString();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private static String resolveBillingReturnUrl(String frontendOrigin, String status, String fallback) {
-        if (frontendOrigin != null && !frontendOrigin.isBlank()) {
-            return frontendOrigin + "/dashboard/billing?status=" + status;
-        }
-        return fallback == null ? "" : fallback.trim();
-    }
-
-    /** planId required; frontendOrigin optional (browser Origin used if omitted). */
-    public record CheckoutRequest(String planId, String frontendOrigin) {}
+    public record CheckoutRequest(String planId) {}
 }

@@ -2,7 +2,6 @@ package com.creative.backend.web.dto;
 
 public record PayHereCheckoutDto(
         String checkoutUrl,
-        boolean sandbox,
         String merchantId,
         String orderId,
         String items,
