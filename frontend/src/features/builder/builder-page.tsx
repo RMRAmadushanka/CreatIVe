@@ -1083,16 +1083,6 @@ export function Builder() {
     <div className="flex h-screen w-full flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-card/60 px-3 md:px-5 backdrop-blur">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded-md bg-gradient-to-br from-indigo-500 to-fuchsia-500" />
-            <div>
-              <div className="text-sm font-semibold tracking-tight">Canvas Builder</div>
-              <div className="text-[10px] text-muted-foreground">
-                {activePage?.title ?? "Untitled"} Â·{" "}
-                <span className="font-mono">{activePage?.slug ?? "/"}</span>
-              </div>
-            </div>
-          </div>
           {projectCtx?.project && (
             <Link
               to="/dashboard/projects/$projectId"
