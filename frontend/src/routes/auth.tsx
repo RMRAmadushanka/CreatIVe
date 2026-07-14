@@ -12,10 +12,10 @@ export const Route = createFileRoute("/auth")({
   }),
   head: () => ({
     meta: [
-      { title: "Sign in — CreatIVe" },
+      { title: "Sign in — PageLoom" },
       {
         name: "description",
-        content: "Sign in or create an account to access CreatIVe.",
+        content: "Sign in or create an account to access PageLoom.",
       },
     ],
   }),

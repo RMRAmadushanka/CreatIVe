@@ -10,10 +10,47 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { APP_NAME } from "@/constants/app";
+import { APP_ICON_URL, APP_LOGO_URL, APP_NAME } from "@/constants/app";
 import { cn } from "@/utils/cn";
 
 const homeSearch = { project: undefined, page: undefined } as const;
+
+function BrandMark({ compact = false }: { compact?: boolean }) {
+  return (
+    <Link
+      to="/"
+      search={homeSearch}
+      className="inline-flex shrink-0 items-center"
+      aria-label={APP_NAME}
+    >
+      {compact ? (
+        <img
+          src={APP_ICON_URL}
+          alt=""
+          className="h-8 w-8 rounded-md object-contain"
+          width={32}
+          height={32}
+        />
+      ) : (
+        <>
+          <img
+            src={APP_LOGO_URL}
+            alt={APP_NAME}
+            className="hidden h-8 w-auto object-contain sm:block"
+            height={32}
+          />
+          <img
+            src={APP_ICON_URL}
+            alt={APP_NAME}
+            className="h-8 w-8 rounded-md object-contain sm:hidden"
+            width={32}
+            height={32}
+          />
+        </>
+      )}
+    </Link>
+  );
+}
 
 export function AppHeader() {
   const user = useAuth();
@@ -23,7 +60,7 @@ export function AppHeader() {
     return (
       <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center px-6">
-          <span className="text-sm font-semibold tracking-tight">{APP_NAME}</span>
+          <BrandMark compact />
         </div>
       </header>
     );
@@ -40,9 +77,7 @@ function MarketingHeader() {
   return (
     <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-6">
-        <Link to="/" search={homeSearch} className="text-sm font-semibold tracking-tight">
-          {APP_NAME}
-        </Link>
+        <BrandMark />
 
         <nav className="hidden items-center gap-6 text-sm text-muted-foreground sm:flex">
           <a href="/#features" className="transition-colors hover:text-foreground">
@@ -112,9 +147,7 @@ function AppWorkspaceHeader({ user }: { user: AuthUser }) {
     <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
         <div className="flex min-w-0 items-center gap-6">
-          <Link to="/" search={homeSearch} className="shrink-0 text-sm font-semibold tracking-tight">
-            {APP_NAME}
-          </Link>
+          <BrandMark />
 
           <nav className="hidden items-center gap-1 md:flex">
             {navItems.map((item) => {

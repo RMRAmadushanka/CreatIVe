@@ -30,10 +30,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: APP_NAME },
-      { name: "description", content: "Visual page builder for CreatIVe" },
+      { name: "description", content: "Visual page builder for PageLoom" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
+      { rel: "icon", href: "/brand/pageloom-icon.png", type: "image/png" },
+      { rel: "apple-touch-icon", href: "/brand/pageloom-icon.png" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       {

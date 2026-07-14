@@ -7,7 +7,7 @@ import type { Plan } from "@/types/billing.types";
 
 const PLAN_BLURBS: Record<string, { tagline: string; bestFor: string; extras: string[] }> = {
   free: {
-    tagline: "Try CreatIVe with no card required",
+    tagline: "Try PageLoom with no card required",
     bestFor: "Solo experiments & first landing pages",
     extras: [
       "Core layout & content blocks",
@@ -122,7 +122,7 @@ function MarketingPlanCard({
 }) {
   const meta = PLAN_BLURBS[plan.id] ?? {
     tagline: plan.name,
-    bestFor: "CreatIVe workspaces",
+    bestFor: "PageLoom workspaces",
     extras: [],
   };
   const featured = plan.id === "pro";

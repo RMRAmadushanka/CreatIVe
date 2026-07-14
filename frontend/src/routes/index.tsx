@@ -13,7 +13,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Choose a plan, sign up, and build pages with CreatIVe — drag-and-drop CMS with PayHere billing.",
+          "Choose a plan, sign up, and build pages with PageLoom — drag-and-drop CMS with PayHere billing.",
       },
     ],
   }),
