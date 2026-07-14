@@ -20,8 +20,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.MultiValueMap;
@@ -36,8 +34,6 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/api/billing")
 public class BillingController {
-
-    private static final Logger log = LoggerFactory.getLogger(BillingController.class);
 
     private final PlanRepository planRepository;
     private final SubscriptionService subscriptionService;
@@ -124,8 +120,8 @@ public class BillingController {
         }
 
         String orderId = "PH-" + UUID.randomUUID().toString().replace("-", "").substring(0, 18).toUpperCase();
-        String currency = "LKR";
         String amount = payHereService.formatAmount(target.getPriceLkr());
+        String currency = "LKR";
         String itemLabel = kind == ChangeKind.RENEW
                 ? "CreatIVe " + target.getName() + " — Monthly renewal"
                 : "CreatIVe " + target.getName() + " — Upgrade";
@@ -139,21 +135,6 @@ public class BillingController {
         billingOrderRepository.save(order);
 
         String[] nameParts = splitName(user.getName());
-        String hash = payHereService.checkoutHashPreformatted(orderId, amount, currency);
-
-        // Diagnostic (no secret logged): compare merchant_id / mode / checkout URL / hash on the
-        // deployed server against your PayHere sandbox account when debugging "Unauthorized payment
-        // request" errors.
-        log.info(
-                "PayHere checkout prepared: sandbox={} checkoutUrl={} merchant_id={} order_id={} amount={} {} hash={}",
-                payHereService.isSandbox(),
-                payHereService.getCheckoutUrl(),
-                payHereService.getMerchantId(),
-                orderId,
-                amount,
-                currency,
-                hash);
-
         return new PayHereCheckoutDto(
                 payHereService.getCheckoutUrl(),
                 payHereService.getMerchantId(),
@@ -161,7 +142,7 @@ public class BillingController {
                 itemLabel,
                 currency,
                 amount,
-                hash,
+                payHereService.checkoutHash(orderId, amount, currency),
                 nameParts[0],
                 nameParts[1],
                 user.getEmail(),
@@ -187,78 +168,60 @@ public class BillingController {
         return toDto(user.getId(), sub);
     }
 
-    /**
-     * PayHere server-to-server payment notification (notify_url).
-     *
-     * <p>PayHere always POSTs as {@code application/x-www-form-urlencoded}. We must verify
-     * {@code md5sig} before trusting anything. Status codes: {@code 2}=success, {@code 0}=pending,
-     * {@code -1}=canceled, {@code -2}=failed, {@code -3}=chargeback. Always respond {@code 200 OK}
-     * once a valid, known order has been processed so PayHere stops retrying.
-     */
     @PostMapping("/payhere/notify")
     public ResponseEntity<String> payhereNotify(@RequestParam MultiValueMap<String, String> form) {
         Map<String, String> params = form.toSingleValueMap();
         String merchantId = params.getOrDefault("merchant_id", "");
         String orderId = params.getOrDefault("order_id", "");
-        String paymentId = params.getOrDefault("payment_id", "");
         String amount = params.getOrDefault("payhere_amount", params.getOrDefault("amount", ""));
         String currency = params.getOrDefault("payhere_currency", params.getOrDefault("currency", "LKR"));
         String statusCode = params.getOrDefault("status_code", "");
         String md5sig = params.getOrDefault("md5sig", "");
 
-        log.info(
-                "PayHere notify received: order_id={} payment_id={} status_code={} amount={} {}",
-                orderId,
-                paymentId,
-                statusCode,
-                amount,
-                currency);
-
         if (!merchantId.equals(payHereService.getMerchantId())) {
-            log.warn("PayHere notify rejected: merchant mismatch for order_id={}", orderId);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("invalid merchant");
         }
         if (!payHereService.verifyNotifyHash(orderId, amount, currency, statusCode, md5sig)) {
-            log.warn("PayHere notify rejected: invalid md5sig for order_id={}", orderId);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("invalid signature");
         }
 
         BillingOrder order = billingOrderRepository.findByOrderId(orderId).orElse(null);
         if (order == null) {
-            log.warn("PayHere notify: unknown order_id={}", orderId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body("order not found");
         }
 
-        // Idempotent success path — PayHere may deliver the same notification more than once.
+        // Idempotent success path
         if ("paid".equals(order.getStatus())) {
             return ResponseEntity.ok("OK");
         }
 
+        // PayHere status codes: 2 = success, 0 = pending, -1 = canceled, -2 = failed, -3 = chargedback.
         switch (statusCode) {
             case "2" -> {
                 if (!amountMatches(order.getAmountLkr(), amount)) {
-                    log.warn(
-                            "PayHere notify: amount mismatch for order_id={} expected={} got={}",
-                            orderId,
-                            order.getAmountLkr(),
-                            amount);
                     return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("amount mismatch");
                 }
                 order.setStatus("paid");
                 order.setPaidAt(LocalDateTime.now());
                 billingOrderRepository.save(order);
                 subscriptionService.activatePaidPlan(order.getUserId(), order.getPlanId(), orderId);
-                log.info("PayHere payment confirmed: order_id={} plan={}", orderId, order.getPlanId());
             }
-            case "0" -> log.info("PayHere payment pending: order_id={}", orderId);
+            case "0" -> {
+                // Payment still pending (e.g. bank/IPG hold) — keep the order pending.
+                if (!"paid".equals(order.getStatus())) {
+                    order.setStatus("pending");
+                    billingOrderRepository.save(order);
+                }
+            }
             case "-1", "-2", "-3" -> {
-                // canceled / failed / chargeback — do not activate; leave subscription untouched.
-                order.setStatus("-3".equals(statusCode) ? "chargeback" : "failed");
-                billingOrderRepository.save(order);
-                log.info("PayHere payment not completed: order_id={} status_code={}", orderId, statusCode);
+                if (!"paid".equals(order.getStatus())) {
+                    order.setStatus("failed");
+                    billingOrderRepository.save(order);
+                }
             }
-            default -> log.warn(
-                    "PayHere notify: unhandled status_code={} for order_id={}", statusCode, orderId);
+            default -> {
+                // Unknown status — acknowledge without changing state.
+            }
         }
         return ResponseEntity.ok("OK");
     }
