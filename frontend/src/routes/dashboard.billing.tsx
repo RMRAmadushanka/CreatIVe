@@ -61,10 +61,14 @@ function BillingPage() {
 
   const checkoutMutation = useMutation({
     mutationFn: (planId: string) => createCheckout(planId),
-    onSuccess: (payload) => {
+    onSuccess: async (payload) => {
       clearPendingPlan();
-      toast.message("Redirecting to PayHere…");
-      submitPayHereCheckout(payload);
+      toast.message("Opening PayHere…");
+      try {
+        await submitPayHereCheckout(payload);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "PayHere failed to open");
+      }
     },
     onError: (err: Error) => toast.error(err.message),
   });

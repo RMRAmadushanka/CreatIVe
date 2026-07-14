@@ -79,53 +79,97 @@ export function classifyPlanChange(current: Plan, target: Plan): PlanChangeKind 
   return "upgrade";
 }
 
-export function submitPayHereCheckout(payload: PayHereCheckout): void {
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const returnUrl =
-    payload.returnUrl && payload.returnUrl.startsWith(origin)
-      ? payload.returnUrl
-      : `${origin}/dashboard/billing?status=success`;
-  const cancelUrl =
-    payload.cancelUrl && payload.cancelUrl.startsWith(origin)
-      ? payload.cancelUrl
-      : `${origin}/dashboard/billing?status=cancel`;
+type PayHereJs = {
+  onCompleted: ((orderId: string) => void) | null;
+  onDismissed: (() => void) | null;
+  onError: ((error: string) => void) | null;
+  startPayment: (payment: Record<string, unknown>) => void;
+};
 
-  const form = document.createElement("form");
-  form.method = "POST";
-  form.action = payload.checkoutUrl;
+declare global {
+  interface Window {
+    payhere?: PayHereJs;
+  }
+}
 
-  const fields: Record<string, string> = {
-    merchant_id: payload.merchantId,
-    return_url: returnUrl,
-    cancel_url: cancelUrl,
-    notify_url: payload.notifyUrl,
-    order_id: payload.orderId,
-    items: payload.items,
-    currency: payload.currency,
-    amount: payload.amount,
-    hash: payload.hash,
-    first_name: payload.firstName,
-    last_name: payload.lastName,
-    email: payload.email,
-    phone: payload.phone,
-    address: payload.address,
-    city: payload.city,
-    country: payload.country,
-    custom_1: payload.custom1,
-    custom_2: payload.custom2,
-  };
-
-  for (const [name, value] of Object.entries(fields)) {
-    if (value == null || value === "") continue;
-    const input = document.createElement("input");
-    input.type = "hidden";
-    input.name = name;
-    input.value = value;
-    form.appendChild(input);
+function loadPayHereScript(): Promise<PayHereJs> {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("PayHere checkout requires a browser"));
+  }
+  if (window.payhere) {
+    return Promise.resolve(window.payhere);
   }
 
-  document.body.appendChild(form);
-  form.submit();
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>('script[data-payhere="sdk"]');
+    if (existing) {
+      existing.addEventListener("load", () => {
+        if (window.payhere) resolve(window.payhere);
+        else reject(new Error("PayHere SDK failed to initialize"));
+      });
+      existing.addEventListener("error", () => reject(new Error("Failed to load PayHere SDK")));
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://www.payhere.lk/lib/payhere.js";
+    script.async = true;
+    script.dataset.payhere = "sdk";
+    script.onload = () => {
+      if (window.payhere) resolve(window.payhere);
+      else reject(new Error("PayHere SDK failed to initialize"));
+    };
+    script.onerror = () => reject(new Error("Failed to load PayHere SDK"));
+    document.head.appendChild(script);
+  });
+}
+
+/**
+ * Opens PayHere onsite checkout (popup). Uses sandbox mode when backend says so.
+ * For JS SDK, return_url / cancel_url must be undefined — notify_url activates the plan.
+ */
+export async function submitPayHereCheckout(payload: PayHereCheckout): Promise<void> {
+  const payhere = await loadPayHereScript();
+  const sandbox = payload.sandbox ?? payload.checkoutUrl.includes("sandbox.payhere.lk");
+
+  return new Promise((resolve, reject) => {
+    payhere.onCompleted = (orderId: string) => {
+      const origin = window.location.origin;
+      window.location.assign(
+        `${origin}/dashboard/billing?status=success&order=${encodeURIComponent(orderId)}`,
+      );
+      resolve();
+    };
+    payhere.onDismissed = () => {
+      resolve();
+    };
+    payhere.onError = (error: string) => {
+      reject(new Error(error || "PayHere payment failed"));
+    };
+
+    payhere.startPayment({
+      sandbox,
+      merchant_id: payload.merchantId,
+      // Required by PayHere JS SDK: must be undefined (not empty string)
+      return_url: undefined,
+      cancel_url: undefined,
+      notify_url: payload.notifyUrl,
+      order_id: payload.orderId,
+      items: payload.items,
+      amount: payload.amount,
+      currency: payload.currency,
+      hash: payload.hash,
+      first_name: payload.firstName,
+      last_name: payload.lastName,
+      email: payload.email,
+      phone: payload.phone,
+      address: payload.address,
+      city: payload.city,
+      country: payload.country,
+      custom_1: payload.custom1,
+      custom_2: payload.custom2,
+    });
+  });
 }
 
 export function formatLimit(n: number): string {

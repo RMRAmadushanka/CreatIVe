@@ -156,14 +156,16 @@ public class BillingController {
         billingOrderRepository.save(order);
 
         String[] nameParts = splitName(user.getName());
+        String hash = payHereService.checkoutHash(orderId, amount, currency);
         return new PayHereCheckoutDto(
                 payHereService.getCheckoutUrl(),
+                payHereService.isSandbox(),
                 payHereService.getMerchantId(),
                 orderId,
                 itemLabel,
                 currency,
                 amount,
-                payHereService.checkoutHash(orderId, amount, currency),
+                hash,
                 nameParts[0],
                 nameParts[1],
                 user.getEmail(),

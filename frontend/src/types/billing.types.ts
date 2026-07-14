@@ -31,6 +31,7 @@ export type Subscription = {
 
 export type PayHereCheckout = {
   checkoutUrl: string;
+  sandbox?: boolean;
   merchantId: string;
   orderId: string;
   items: string;
