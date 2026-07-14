@@ -36,7 +36,10 @@ export async function createCheckout(planId: string): Promise<PayHereCheckout> {
   const res = await authorizedFetch(`${API_BASE_URL}${API_ENDPOINTS.billingCheckout}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ planId }),
+    body: JSON.stringify({
+      planId,
+      frontendOrigin: typeof window !== "undefined" ? window.location.origin : undefined,
+    }),
     requireAuth: true,
   });
   return parseOrThrow<PayHereCheckout>(res);
@@ -77,14 +80,24 @@ export function classifyPlanChange(current: Plan, target: Plan): PlanChangeKind 
 }
 
 export function submitPayHereCheckout(payload: PayHereCheckout): void {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const returnUrl =
+    payload.returnUrl && payload.returnUrl.startsWith(origin)
+      ? payload.returnUrl
+      : `${origin}/dashboard/billing?status=success`;
+  const cancelUrl =
+    payload.cancelUrl && payload.cancelUrl.startsWith(origin)
+      ? payload.cancelUrl
+      : `${origin}/dashboard/billing?status=cancel`;
+
   const form = document.createElement("form");
   form.method = "POST";
   form.action = payload.checkoutUrl;
 
   const fields: Record<string, string> = {
     merchant_id: payload.merchantId,
-    return_url: payload.returnUrl,
-    cancel_url: payload.cancelUrl,
+    return_url: returnUrl,
+    cancel_url: cancelUrl,
     notify_url: payload.notifyUrl,
     order_id: payload.orderId,
     items: payload.items,
@@ -103,6 +116,7 @@ export function submitPayHereCheckout(payload: PayHereCheckout): void {
   };
 
   for (const [name, value] of Object.entries(fields)) {
+    if (value == null || value === "") continue;
     const input = document.createElement("input");
     input.type = "hidden";
     input.name = name;

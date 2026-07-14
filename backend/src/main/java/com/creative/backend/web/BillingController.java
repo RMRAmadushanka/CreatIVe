@@ -27,6 +27,7 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -79,7 +80,9 @@ public class BillingController {
      * Downgrades use {@code POST /schedule-change}.
      */
     @PostMapping("/checkout")
-    public PayHereCheckoutDto checkout(@RequestBody CheckoutRequest request) {
+    public PayHereCheckoutDto checkout(
+            @RequestBody CheckoutRequest request,
+            @RequestHeader(value = "Origin", required = false) String originHeader) {
         if (!payHereService.isConfigured()) {
             throw new ResponseStatusException(
                     HttpStatus.SERVICE_UNAVAILABLE,
@@ -120,6 +123,16 @@ public class BillingController {
                     "You can renew when your period ends within 7 days, or if payment is past due.");
         }
 
+        String frontendOrigin = resolveFrontendOrigin(request.frontendOrigin(), originHeader);
+        String returnUrl = resolveBillingReturnUrl(frontendOrigin, "success", payHereService.getReturnUrl());
+        String cancelUrl = resolveBillingReturnUrl(frontendOrigin, "cancel", payHereService.getCancelUrl());
+        if (returnUrl.isBlank() || cancelUrl.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Set PAYHERE_RETURN_URL and PAYHERE_CANCEL_URL to your frontend billing page, "
+                            + "or call checkout from the browser so Origin can be used.");
+        }
+
         // PayHere requires US-style decimals in both amount + hash (never locale commas).
         String orderId = "PH" + UUID.randomUUID().toString().replace("-", "").substring(0, 18).toUpperCase();
         String amount = String.format(Locale.US, "%.2f", (double) target.getPriceLkr());
@@ -148,12 +161,12 @@ public class BillingController {
                 nameParts[0],
                 nameParts[1],
                 user.getEmail(),
-                "0770000000",
-                "Colombo",
+                "0771234567",
+                "No. 1, Galle Road",
                 "Colombo",
                 "Sri Lanka",
-                payHereService.getReturnUrl(),
-                payHereService.getCancelUrl(),
+                returnUrl,
+                cancelUrl,
                 payHereService.getNotifyUrl(),
                 user.getId(),
                 target.getId());
@@ -287,5 +300,36 @@ public class BillingController {
         return parts;
     }
 
-    public record CheckoutRequest(String planId) {}
+    private static String resolveFrontendOrigin(String bodyOrigin, String headerOrigin) {
+        String candidate = bodyOrigin != null && !bodyOrigin.isBlank() ? bodyOrigin : headerOrigin;
+        if (candidate == null || candidate.isBlank()) {
+            return "";
+        }
+        try {
+            java.net.URI uri = java.net.URI.create(candidate.trim());
+            if (uri.getScheme() == null || uri.getHost() == null) {
+                return "";
+            }
+            StringBuilder origin = new StringBuilder();
+            origin.append(uri.getScheme()).append("://").append(uri.getHost());
+            if (uri.getPort() > 0
+                    && !(uri.getPort() == 80 && "http".equalsIgnoreCase(uri.getScheme()))
+                    && !(uri.getPort() == 443 && "https".equalsIgnoreCase(uri.getScheme()))) {
+                origin.append(":").append(uri.getPort());
+            }
+            return origin.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static String resolveBillingReturnUrl(String frontendOrigin, String status, String fallback) {
+        if (frontendOrigin != null && !frontendOrigin.isBlank()) {
+            return frontendOrigin + "/dashboard/billing?status=" + status;
+        }
+        return fallback == null ? "" : fallback.trim();
+    }
+
+    /** planId required; frontendOrigin optional (browser Origin used if omitted). */
+    public record CheckoutRequest(String planId, String frontendOrigin) {}
 }
