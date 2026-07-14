@@ -76,8 +76,12 @@ public class BillingController {
     @GetMapping("/me")
     public SubscriptionDto me() {
         User user = currentUserService.requireUser();
-        // Re-apply latest paid order if notify activated payment but subscription didn't update yet.
-        syncLatestPaidOrder(user.getId());
+        try {
+            // Re-apply latest paid order if notify activated payment but subscription didn't update yet.
+            syncLatestPaidOrder(user.getId());
+        } catch (Exception ex) {
+            log.warn("Paid-order sync skipped for user {}: {}", user.getId(), ex.toString());
+        }
         return toDto(user.getId(), subscriptionService.ensureActiveSubscription(user.getId()));
     }
 

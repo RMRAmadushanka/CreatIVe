@@ -82,6 +82,9 @@ public class SubscriptionService {
     /**
      * Activates or renews a paid plan after successful PayHere payment.
      * Upgrades and renewals apply immediately. Pending downgrades are cleared.
+     *
+     * <p>Updates the existing active row in place (instead of cancel + insert) so we never
+     * violate {@code uq_subscriptions_one_active} (one active/past_due per user).
      */
     @Transactional
     public Subscription activatePaidPlan(String userId, String planId, String payhereOrderId) {
@@ -113,11 +116,16 @@ public class SubscriptionService {
         }
 
         if (existing != null) {
-            existing.setStatus("cancelled");
+            // Upgrade / switch to another paid plan — mutate the same active row.
+            existing.setPlan(plan);
+            existing.setStatus("active");
+            existing.setCurrentPeriodStart(now);
+            existing.setCurrentPeriodEnd(now.plusMonths(1));
+            existing.setPayhereOrderId(payhereOrderId);
             existing.setCancelAtPeriodEnd(false);
             existing.setPendingPlan(null);
             existing.setGracePeriodEndsAt(null);
-            subscriptionRepository.save(existing);
+            return subscriptionRepository.save(existing);
         }
 
         Subscription next = new Subscription();
@@ -224,34 +232,47 @@ public class SubscriptionService {
 
     private Subscription applyPendingPlan(Subscription sub) {
         Plan pending = sub.getPendingPlan();
-        sub.setStatus("expired");
+        LocalDateTime now = LocalDateTime.now();
+
+        if (pending == null || "free".equals(pending.getId()) || pending.getPriceLkr() <= 0) {
+            Plan free = planRepository
+                    .findById("free")
+                    .orElseThrow(() -> new IllegalStateException("Free plan is missing — run Flyway V5"));
+            sub.setPlan(free);
+            sub.setStatus("active");
+            sub.setCurrentPeriodStart(now);
+            sub.setCurrentPeriodEnd(now.plusYears(100));
+            sub.setPendingPlan(null);
+            sub.setCancelAtPeriodEnd(false);
+            sub.setGracePeriodEndsAt(null);
+            sub.setPayhereOrderId(null);
+            return subscriptionRepository.save(sub);
+        }
+
+        sub.setPlan(pending);
+        sub.setStatus("active");
+        sub.setCurrentPeriodStart(now);
+        sub.setCurrentPeriodEnd(now.plusMonths(1));
         sub.setPendingPlan(null);
         sub.setCancelAtPeriodEnd(false);
         sub.setGracePeriodEndsAt(null);
-        subscriptionRepository.save(sub);
-
-        if (pending == null || "free".equals(pending.getId()) || pending.getPriceLkr() <= 0) {
-            return createFree(sub.getUserId());
-        }
-
-        LocalDateTime now = LocalDateTime.now();
-        Subscription next = new Subscription();
-        next.setUserId(sub.getUserId());
-        next.setPlan(pending);
-        next.setStatus("active");
-        next.setCurrentPeriodStart(now);
-        next.setCurrentPeriodEnd(now.plusMonths(1));
-        next.setCancelAtPeriodEnd(false);
-        return subscriptionRepository.save(next);
+        return subscriptionRepository.save(sub);
     }
 
     private Subscription endPaidSubscription(Subscription sub) {
-        sub.setStatus("expired");
+        Plan free = planRepository
+                .findById("free")
+                .orElseThrow(() -> new IllegalStateException("Free plan is missing — run Flyway V5"));
+        LocalDateTime now = LocalDateTime.now();
+        sub.setPlan(free);
+        sub.setStatus("active");
+        sub.setCurrentPeriodStart(now);
+        sub.setCurrentPeriodEnd(now.plusYears(100));
         sub.setPendingPlan(null);
         sub.setCancelAtPeriodEnd(false);
         sub.setGracePeriodEndsAt(null);
-        subscriptionRepository.save(sub);
-        return createFree(sub.getUserId());
+        sub.setPayhereOrderId(null);
+        return subscriptionRepository.save(sub);
     }
 
     private Plan requirePurchasablePlan(String planId) {
