@@ -54,6 +54,7 @@ import {
   Pencil,
   Eye,
   EyeOff,
+  Download,
   SlidersHorizontal,
 } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -93,6 +94,7 @@ import { projectsStore, useProjects, useProjectsStore, type Project } from "@/st
 import { builderStore } from "@/store/builder-store";
 import { createPage } from "@/services/page.service";
 import { slugForBackend } from "@/utils/string";
+import { downloadViteProjectZip } from "@/features/export";
 import {
   BuilderDndProvider,
   CanvasDraggable,
@@ -195,6 +197,13 @@ const RESPONSIVE_KEYS = new Set([
 
 function bpFor(vp: Viewport): "desktop" | "mobile" {
   return vp === "mobile" ? "mobile" : "desktop";
+}
+
+/** Equal left/right page inset for every top-level component on the canvas. */
+function pageGutterPx(vp: Viewport): number {
+  if (vp === "mobile") return 16;
+  if (vp === "tablet") return 24;
+  return 32;
 }
 
 // Combine the builder's viewport switcher with the actual browser width so
@@ -686,11 +695,14 @@ export function Builder() {
   const [viewport, setViewport] = useState<Viewport>("desktop");
   const [globals, setGlobals] = useState<GlobalStyles>(DEFAULT_GLOBALS);
   const [globalsOpen, setGlobalsOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [pendingRowParent, setPendingRowParent] = useState<{ parentId: string | null } | null>(
     null,
   );
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const isMobile = useIsMobile();
+  const effectiveViewport = useEffectiveViewport(viewport);
+  const pageGutter = pageGutterPx(effectiveViewport);
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
   const [mobilePropsOpen, setMobilePropsOpen] = useState(false);
 
@@ -1049,8 +1061,38 @@ export function Builder() {
     }
   };
 
-  const handlePublish = () => {
-    toast.success("Published!", { description: "Your page is now live (demo)." });
+  const handleExportVite = async () => {
+    try {
+      setExporting(true);
+      // Include latest canvas edits on the active page even if not saved yet.
+      const nextPages = pages.map((p) =>
+        p.id === activePageId ? { ...p, canvasNodes: elements } : p,
+      );
+      const filename = await downloadViteProjectZip({
+        projectName: projectCtx?.project?.name ?? activePage?.title ?? "PageLoom Site",
+        pages: nextPages.map((p) => ({
+          id: p.id,
+          title: p.title,
+          slug: p.slug,
+          canvasNodes: (p.canvasNodes ?? []) as unknown[],
+        })),
+        theme: {
+          primary: globals.primary,
+          secondary: globals.secondary,
+          font: globals.font,
+          radius: globals.radius,
+        },
+      });
+      toast.success("Vite project exported", {
+        description: `${filename} — unzip, then run npm install && npm run dev`,
+      });
+    } catch (error) {
+      toast.error("Export failed", {
+        description: error instanceof Error ? error.message : "Could not create ZIP",
+      });
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -1204,11 +1246,16 @@ export function Builder() {
           </Button>
           <Button
             size="sm"
-            onClick={handlePublish}
+            onClick={() => void handleExportVite()}
+            disabled={exporting}
             className="bg-indigo-500 text-white hover:bg-indigo-600"
           >
-            <Rocket className="mr-2 h-4 w-4" />
-            Publish
+            {exporting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="mr-2 h-4 w-4" />
+            )}
+            {exporting ? "Exporting…" : "Export Vite"}
           </Button>
         </div>
       </header>
@@ -1293,10 +1340,14 @@ export function Builder() {
                 ["--gs-on-primary" as string]: "#ffffff",
                 ["--gs-surface" as string]: "#111827",
                 ["--gs-text" as string]: "#e5e7eb",
+                // Equal left/right inset for every dragged component.
+                paddingLeft: pageGutter,
+                paddingRight: pageGutter,
+                boxSizing: "border-box",
               } as CSSProperties;
               const canvasClass = isPreviewMode
                 ? "mx-auto min-h-full transition-[width] duration-500 ease-out"
-                : "mx-auto min-h-full rounded-xl border-2 border-dashed border-border bg-card/30 p-6 transition-[width] duration-500 ease-out";
+                : "mx-auto min-h-full rounded-xl border-2 border-dashed border-border bg-card/30 py-6 transition-[width] duration-500 ease-out";
 
               if (elements.length === 0) {
                 return (
@@ -2069,14 +2120,12 @@ function FullSectionRender({
   const bg = String(p.background ?? "").trim();
   const bgImage = String(p.backgroundImage ?? "").trim();
   const vp = useEffectiveViewport(viewport);
-  const isMobileEff = vp === "mobile";
   const shell = (
     <div
       style={{
         paddingTop: Number(readResp(p.paddingTop, vp)),
         paddingBottom: Number(readResp(p.paddingBottom, vp)),
-        paddingLeft: isMobileEff ? 16 : 24,
-        paddingRight: isMobileEff ? 16 : 24,
+        // Horizontal inset comes from the shared page gutter on the canvas.
         background: bg || "var(--gs-surface)",
         backgroundImage: bgImage ? `url("${bgImage}")` : undefined,
         backgroundSize: bgImage ? "cover" : undefined,
@@ -2367,18 +2416,42 @@ function LeafRender({ node, viewport }: { node: BuilderElement; viewport: Viewpo
       const bg = String(p.background ?? "").trim();
       const color = String(p.color ?? "").trim();
       const brandImg = String(p.brandImage ?? "").trim();
-      const align = String(p.align ?? "left") as "left" | "center" | "right";
+      const align = String(readResp(p.align, vp) || "left") as "left" | "center" | "right";
       const links = (p.links as NavLink[] | undefined) ?? [];
-      const pt = Number(readResp(p.paddingTop, viewport) || 48);
-      const pb = Number(readResp(p.paddingBottom, viewport) || 32);
-      const stackMobile = viewport === "mobile";
-      // Stack on the mobile viewport preview OR on real mobile screen widths.
-      const rowClass = stackMobile
-        ? "flex flex-col gap-6"
-        : "flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between sm:gap-8";
-      const navClass = stackMobile
-        ? "flex flex-col gap-2"
-        : "flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-x-6 sm:gap-y-2";
+      const pt = Number(readResp(p.paddingTop, vp) || (vp === "mobile" ? 32 : 48));
+      const pb = Number(readResp(p.paddingBottom, vp) || (vp === "mobile" ? 24 : 32));
+      const isMobile = vp === "mobile";
+
+      // Drive layout from builder viewport (not window `sm:` breakpoints),
+      // so Desktop / Tablet / Mobile preview modes match the published look.
+      const stack = isMobile || align === "center";
+      const itemsClass =
+        align === "center" ? "items-center" : align === "right" ? "items-end" : "items-start";
+      const justifyClass =
+        align === "center"
+          ? "justify-center"
+          : align === "right"
+            ? "justify-end"
+            : "justify-between";
+      const textAlignClass =
+        align === "center" ? "text-center" : align === "right" ? "text-right" : "text-left";
+
+      const rowClass = stack
+        ? `flex flex-col gap-5 ${itemsClass}`
+        : `flex flex-row gap-8 ${itemsClass} ${justifyClass}`;
+
+      const navClass = isMobile
+        ? `flex flex-col gap-2.5 ${itemsClass}`
+        : `flex flex-row flex-wrap gap-x-6 gap-y-2 ${
+            align === "right"
+              ? "justify-end"
+              : align === "center"
+                ? "justify-center"
+                : "justify-start"
+          }`;
+
+      const brandMax = stack ? "w-full max-w-md" : "min-w-0 max-w-sm flex-1";
+
       return (
         <footer
           style={{
@@ -2388,50 +2461,65 @@ function LeafRender({ node, viewport }: { node: BuilderElement; viewport: Viewpo
             paddingBottom: pb,
             borderTop: "1px solid rgba(255,255,255,0.08)",
             transition: "background 200ms ease, color 200ms ease, padding 200ms ease",
-            textAlign: align,
           }}
-          className="w-full px-4 sm:px-6"
+          className={`w-full ${textAlignClass}`}
         >
-          <div className={rowClass}>
-            <div className="flex min-w-0 flex-col gap-2 sm:max-w-md">
-              {brandImg ? (
-                <img
-                  src={brandImg}
-                  alt={String(p.brandText ?? "Brand")}
-                  className="h-8 w-auto object-contain"
-                />
-              ) : (
-                <span className="text-lg font-semibold" style={{ color: "var(--gs-primary)" }}>
-                  {String(p.brandText ?? "")}
-                </span>
-              )}
-              {String(p.tagline ?? "").trim() && (
-                <p className="text-sm opacity-75 break-words">{String(p.tagline)}</p>
+          <div className={`mx-auto w-full ${isMobile ? "max-w-full" : "max-w-6xl"}`}>
+            <div className={rowClass}>
+              <div className={`flex flex-col gap-2 ${brandMax} ${itemsClass}`}>
+                {brandImg ? (
+                  <img
+                    src={brandImg}
+                    alt={String(p.brandText ?? "Brand")}
+                    className={`${isMobile ? "h-7" : "h-9"} w-auto object-contain`}
+                    draggable={false}
+                  />
+                ) : (
+                  <span
+                    className={`${isMobile ? "text-base" : "text-lg"} font-semibold`}
+                    style={{ color: "var(--gs-primary)" }}
+                  >
+                    {String(p.brandText ?? "")}
+                  </span>
+                )}
+                {String(p.tagline ?? "").trim() && (
+                  <p
+                    className={`${isMobile ? "text-xs" : "text-sm"} opacity-75 break-words ${
+                      stack ? "" : "max-w-sm"
+                    }`}
+                  >
+                    {String(p.tagline)}
+                  </p>
+                )}
+              </div>
+
+              {links.length > 0 && (
+                <nav className={`${navClass} ${stack ? "w-full" : "shrink-0"}`} aria-label="Footer">
+                  {links.map((l) => (
+                    <a
+                      key={l.id}
+                      href={l.href || "#"}
+                      onClick={(e) => e.preventDefault()}
+                      className={`${
+                        isMobile ? "py-1 text-sm" : "text-sm"
+                      } opacity-80 transition-opacity hover:opacity-100`}
+                    >
+                      {l.label}
+                    </a>
+                  ))}
+                </nav>
               )}
             </div>
-            {links.length > 0 && (
-              <nav className={navClass}>
-                {links.map((l) => (
-                  <a
-                    key={l.id}
-                    href={l.href || "#"}
-                    onClick={(e) => e.preventDefault()}
-                    className="text-sm opacity-80 hover:opacity-100 transition-opacity"
-                  >
-                    {l.label}
-                  </a>
-                ))}
-              </nav>
+
+            {String(p.copyright ?? "").trim() && (
+              <div
+                className={`${isMobile ? "mt-6 pt-3 text-[11px]" : "mt-8 pt-4 text-xs"} opacity-60`}
+                style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}
+              >
+                {String(p.copyright)}
+              </div>
             )}
           </div>
-          {String(p.copyright ?? "").trim() && (
-            <div
-              className="mt-8 pt-4 text-xs opacity-60"
-              style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}
-            >
-              {String(p.copyright)}
-            </div>
-          )}
         </footer>
       );
     }
@@ -4847,7 +4935,7 @@ function NavbarRender({ node, viewport }: { node: BuilderElement; viewport: View
         background: bg || "var(--gs-surface)",
         borderRadius: "var(--gs-radius)",
       }}
-      className={`relative border border-border/60 px-4 py-3 sm:px-5 ${
+      className={`relative border border-border/60 py-3 ${
         sticky ? "shadow-sm ring-1 ring-indigo-500/30" : ""
       }`}
     >
